@@ -19,8 +19,12 @@
 
 import os
 
-import deepspeed.comm as dist
 import torch
+
+try:
+    import deepspeed.comm as dist
+except ModuleNotFoundError:
+    dist = None
 
 
 class Singleton:
@@ -45,6 +49,11 @@ class ProcessGroupManager(Singleton):
     def __init__(self, ulysses_degree, ring_degree, dp_degree, use_ulysses_low, ring_type):
         if not hasattr(self, "__initialized"):
             super().__init__()
+            if dist is None:
+                raise ModuleNotFoundError(
+                    "deepspeed is required to initialize sequence parallel process groups. "
+                    "Single-process eval can continue as long as set_pg_manager() is not called."
+                )
             self.ulysses_degree = ulysses_degree
             self.ring_type = ring_type
             self.ulysses_seq_len = None
@@ -157,6 +166,11 @@ def set_pg_manager(sp_degree, sp_ring_degree=1, use_ulysses_low=True, ring_type=
     Set the process group manager for sequence parallelism.
     sp_degree = sp_ring_degree x sp_ulysses_degree
     """
+    if dist is None:
+        raise ModuleNotFoundError(
+            "deepspeed is not installed, so sequence parallelism cannot be initialized. "
+            "For single-process inference/eval, leave seq_parallel_size at 1 and do not call set_pg_manager()."
+        )
 
     # first check torch distributed group init and set device accordingly;
     # (DL) TODO: Whether this can be skipped in DeepSpeed.

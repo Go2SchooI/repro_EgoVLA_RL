@@ -17,10 +17,15 @@
 import io
 import pathlib
 
-from iopath.common.file_io import g_pathmgr
-from pytorchvideo.data.encoded_video import EncodedVideo, select_video_class
-
 import torch
+
+try:
+    from iopath.common.file_io import g_pathmgr
+    from pytorchvideo.data.encoded_video import EncodedVideo, select_video_class
+except ModuleNotFoundError:
+    g_pathmgr = None
+    EncodedVideo = object
+    select_video_class = None
 
 mano_per_dim_min = [
   -1,
@@ -58,6 +63,14 @@ def denorm_hand_dof(hand_dof):
 class VILAEncodedVideo(EncodedVideo):
     @classmethod
     def from_bytesio(cls, file_path: str, decode_audio: bool = True, decoder: str = "pyav"):
+        global g_pathmgr, select_video_class
+        if g_pathmgr is None or select_video_class is None:
+            from iopath.common.file_io import g_pathmgr as _g_pathmgr
+            from pytorchvideo.data.encoded_video import select_video_class as _select_video_class
+
+            g_pathmgr = _g_pathmgr
+            select_video_class = _select_video_class
+
         if isinstance(file_path, io.BytesIO):
             video_file = file_path
             file_path = "tmp.mp4"

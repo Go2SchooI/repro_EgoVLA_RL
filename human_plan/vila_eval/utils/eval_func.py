@@ -40,13 +40,15 @@ def eval_single_sample(
       [raw_data_dict["input_ids"]], batch_first=True, padding_value=tokenizer.pad_token_id
   ).to(model.device)
   data_dict["attention_mask"]=data_dict["input_ids"].ne(tokenizer.pad_token_id).to(model.device)
+  # Keep token-level labels so the model can still locate placeholder tokens
+  # during inference, but skip action-supervision tensors below.
   data_dict["labels"] = torch.nn.utils.rnn.pad_sequence(
       [raw_data_dict["labels"]], batch_first=True, padding_value=-100
   ).to(model.device)
 
   data_dict["inference"] = True
-  data_dict["raw_action_labels"] = raw_data_dict["raw_action_label"].to(model.dtype).to(model.device) # No Need to Unsqueeze
-  data_dict["raw_action_masks"] = raw_data_dict["raw_action_mask"].to(model.device) # No Need to Unsqueeze
+  data_dict["raw_action_labels"] = None
+  data_dict["raw_action_masks"] = None
 
   data_dict["raw_proprio_inputs"] = raw_data_dict["proprio_input"].to(model.dtype).to(model.device)
   data_dict["raw_proprio_inputs_2d"] = raw_data_dict["proprio_input_2d"].to(model.dtype).to(model.device)
@@ -60,8 +62,11 @@ def eval_single_sample(
       # with torch.eval():
       output = model.forward(**data_dict)
   # print(output.prediction)
+  raw_action_label = raw_data_dict.get("raw_action_label")
+  raw_action_mask = raw_data_dict.get("raw_action_mask")
+  loss_value = output.loss.item() if getattr(output, "loss", None) is not None else 0.0
   return output.prediction.cpu().numpy(), \
     raw_data_dict["raw_image_obs"], \
-    raw_data_dict["raw_action_label"].cpu().numpy(), \
-    data_dict["raw_action_masks"].cpu().numpy(), \
-    output.loss.item()
+    (raw_action_label.cpu().numpy() if raw_action_label is not None else None), \
+    (raw_action_mask.cpu().numpy() if raw_action_mask is not None else None), \
+    loss_value

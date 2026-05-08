@@ -169,3 +169,8 @@ pre_processing
 checkpoints
 
 .vscode
+
+
+playground_eval
+mano_v1_2
+.vendor_py

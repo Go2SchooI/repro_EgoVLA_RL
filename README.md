@@ -21,11 +21,8 @@ follow the VILA setup instruction
 ```bash
 cd VILA
 ./environment_setup.sh vila
-```
-
-### Install EgoVLA related dependency
-
-```bash
+cd ..
+conda activate vila
 bash ./build_env.sh
 ```
 

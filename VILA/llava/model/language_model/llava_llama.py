@@ -139,10 +139,15 @@ from human_plan.utils.mano.model import (
 from human_plan.utils.mano.forward import mano_forward
 
 from .geodesic_loss import geodesic_loss
-from pytorch3d.transforms import so3_exp_map, axis_angle_to_matrix
-from pytorch3d.transforms import axis_angle_to_quaternion, matrix_to_axis_angle
-
-from .rotation_convert import rot6d_to_rotmat, batch_axis2matrix, batch_matrix2axis
+from .rotation_convert import (
+    angle_axis_to_quaternion as axis_angle_to_quaternion,
+    batch_axis2matrix as axis_angle_to_matrix,
+    batch_axis2matrix as so3_exp_map,
+    batch_matrix2axis as matrix_to_axis_angle,
+    rot6d_to_rotmat,
+    batch_axis2matrix,
+    batch_matrix2axis,
+)
 # FIXME we will follow the convention to add a new class for CausalLM in the future
 class LlavaLlamaModel(LlavaMetaModel, LlavaMetaForCausalLM, PreTrainedModel):
     config_class = LlavaLlamaConfig

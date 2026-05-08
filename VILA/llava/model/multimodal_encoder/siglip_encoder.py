@@ -14,6 +14,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import importlib.util
+
 import torch
 from transformers import PretrainedConfig, SiglipImageProcessor
 
@@ -22,13 +24,17 @@ from llava.model.multimodal_encoder.vision_encoder import VisionTower, VisionTow
 from .siglip import SiglipVisionModel
 
 
+def _get_siglip_attn_implementation() -> str:
+    return "flash_attention_2" if importlib.util.find_spec("flash_attn") is not None else "eager"
+
+
 class SiglipVisionTower(VisionTower):
     def __init__(self, model_name_or_path: str, config: PretrainedConfig) -> None:
         super().__init__(model_name_or_path, config)
         # TODO(ligengl): why pass config here leading to errors?
         self.vision_tower = SiglipVisionModel.from_pretrained(
             model_name_or_path,
-            attn_implementation="flash_attention_2",
+            attn_implementation=_get_siglip_attn_implementation(),
             torch_dtype=eval(config.model_dtype),
         )
         self.image_processor = SiglipImageProcessor.from_pretrained(model_name_or_path)
@@ -40,7 +46,7 @@ class SiglipVisionTowerS2(VisionTowerS2):
         super().__init__(model_name_or_path, config)
         self.vision_tower = SiglipVisionModel.from_pretrained(
             model_name_or_path,
-            attn_implementation="flash_attention_2",
+            attn_implementation=_get_siglip_attn_implementation(),
             torch_dtype=eval(config.model_dtype),
         )
         self.image_processor = SiglipImageProcessor.from_pretrained(model_name_or_path)

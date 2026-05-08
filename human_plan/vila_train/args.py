@@ -3,6 +3,15 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence, List
 import transformers
 
+try:
+    # transformers>=4.56 adds `parallelism_config: Optional["ParallelismConfig"]`
+    # to TrainingArguments. HfArgumentParser resolves type hints in this module's
+    # global scope, so make the symbol available when running under newer versions.
+    from accelerate.parallelism_config import ParallelismConfig  # noqa: F401
+except Exception:
+    class ParallelismConfig:  # type: ignore[no-redef]
+        pass
+
 @dataclass
 class VLAModelArguments(ModelArguments):
     # Action

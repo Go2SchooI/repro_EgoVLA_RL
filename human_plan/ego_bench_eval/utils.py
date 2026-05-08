@@ -1,5 +1,8 @@
 import torch
-from omni.isaac.lab.utils.math import subtract_frame_transforms
+try:
+  from omni.isaac.lab.utils.math import subtract_frame_transforms, quat_apply
+except ModuleNotFoundError:
+  from isaaclab.utils.math import subtract_frame_transforms, quat_apply
 from human_plan.utils.mano.forward import (
    mano_forward_retarget
 )
@@ -45,6 +48,9 @@ TASK_MAX_HORIZON = {
  
   "Humanoid-Stack-Can-Into-Drawer-v0": 400
 }
+
+FLIP_MUG_STRICT_Z_THRESHOLD = 0.866
+FLIP_MUG_STRICT_REQUIRED_STEPS = 3
 
 TASK_INIT_EPISODE = {
     "Close-Drawer": [
@@ -196,6 +202,33 @@ TASK_INIT_EPISODE = {
 def get_language_instruction(task):
   task_name = task[9:-3]
   return LANGUAGE_MAPPING[task_name]
+
+
+def update_eval_success(task_name, base_env, env_results, success_streak):
+  success_tensor = env_results[0]["success"]
+  if task_name != "Humanoid-Flip-Mug-v0":
+    return success_tensor.sum().item() == 1, success_streak
+
+  mug_quat = base_env.mug.data.root_quat_w
+  world_z_axis = torch.tensor(
+    (0.0, 0.0, 1.0), device=mug_quat.device, dtype=mug_quat.dtype
+  ).repeat(mug_quat.shape[0], 1)
+  mug_up_axis = quat_apply(mug_quat, world_z_axis)
+  pose_success = mug_up_axis[:, 2] > FLIP_MUG_STRICT_Z_THRESHOLD
+
+  if pose_success.sum().item() == 1:
+    success_streak += 1
+  else:
+    success_streak = 0
+
+  strict_success = pose_success.clone()
+  if success_streak < FLIP_MUG_STRICT_REQUIRED_STEPS:
+    strict_success = torch.zeros_like(strict_success)
+
+  env_results[0]["flip_mug_pose_success"] = pose_success
+  env_results[0]["success"] = strict_success
+
+  return strict_success.sum().item() == 1, success_streak
 
 from human_plan.dataset_preprocessing.utils.mano_utils import (
   obtain_mano_pose_otv_inspire_single_step
@@ -349,16 +382,26 @@ def ik_step(
     
     action
 ):
-  left_jacobin_idx = env.left_ee_idx-1
-  right_jacobin_idx = env.right_ee_idx-1
+  base_env = env.unwrapped if hasattr(env, "unwrapped") else env
 
-  robot_pose_w = env.robot.data.root_state_w[:, 0:7]
-  left_arm_jacobian = env.robot.root_physx_view.get_jacobians()[:, left_jacobin_idx, :, env.cfg.left_arm_cfg.joint_ids]
-  left_ee_curr_pose_world = env.robot.data.body_state_w[:, env.cfg.left_arm_cfg.body_ids[0], 0:7]
-  left_joint_pos = env.robot.data.joint_pos[:, env.cfg.left_arm_cfg.joint_ids]
-  right_arm_jacobian = env.robot.root_physx_view.get_jacobians()[:, right_jacobin_idx, :, env.cfg.right_arm_cfg.joint_ids]
-  right_ee_curr_pose_world = env.robot.data.body_state_w[:, env.cfg.right_arm_cfg.body_ids[0], 0:7]
-  right_joint_pos = env.robot.data.joint_pos[:, env.cfg.right_arm_cfg.joint_ids]
+  left_jacobin_idx = base_env.left_ee_idx - 1
+  right_jacobin_idx = base_env.right_ee_idx - 1
+
+  robot_pose_w = base_env.robot.data.root_state_w[:, 0:7]
+  left_arm_jacobian = base_env.robot.root_physx_view.get_jacobians()[
+      :, left_jacobin_idx, :, base_env.cfg.left_arm_cfg.joint_ids
+  ]
+  left_ee_curr_pose_world = base_env.robot.data.body_state_w[
+      :, base_env.cfg.left_arm_cfg.body_ids[0], 0:7
+  ]
+  left_joint_pos = base_env.robot.data.joint_pos[:, base_env.cfg.left_arm_cfg.joint_ids]
+  right_arm_jacobian = base_env.robot.root_physx_view.get_jacobians()[
+      :, right_jacobin_idx, :, base_env.cfg.right_arm_cfg.joint_ids
+  ]
+  right_ee_curr_pose_world = base_env.robot.data.body_state_w[
+      :, base_env.cfg.right_arm_cfg.body_ids[0], 0:7
+  ]
+  right_joint_pos = base_env.robot.data.joint_pos[:, base_env.cfg.right_arm_cfg.joint_ids]
   # prepare IK 
   left_ee_curr_pose_robot, left_ee_curr_quat_robot = subtract_frame_transforms(
       robot_pose_w[:, 0:3], robot_pose_w[:, 3:7], left_ee_curr_pose_world[:, 0:3], left_ee_curr_pose_world[:, 3:7]
@@ -381,11 +424,11 @@ def ik_step(
   right_joint_pos_des = right_ik_controller.compute(right_ee_curr_pos_robot, right_ee_curr_quat_robot, right_arm_jacobian, right_joint_pos)
 
   action[:, :] = 0
-  action[:, env.cfg.left_arm_cfg.joint_ids] = left_joint_pos_des
-  action[:, env.cfg.right_arm_cfg.joint_ids] = right_joint_pos_des
+  action[:, base_env.cfg.left_arm_cfg.joint_ids] = left_joint_pos_des
+  action[:, base_env.cfg.right_arm_cfg.joint_ids] = right_joint_pos_des
 
-  action[:, env.cfg.left_hand_cfg.joint_ids] =  torch.FloatTensor(left_hand_dof).to(action.device)# set hand joint commands
-  action[:, env.cfg.right_hand_cfg.joint_ids] =  torch.FloatTensor(right_hand_dof).to(action.device)# set hand joint commands
+  action[:, base_env.cfg.left_hand_cfg.joint_ids] = torch.FloatTensor(left_hand_dof).to(action.device)
+  action[:, base_env.cfg.right_hand_cfg.joint_ids] = torch.FloatTensor(right_hand_dof).to(action.device)
 
 
 

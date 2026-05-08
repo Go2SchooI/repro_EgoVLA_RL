@@ -1,14 +1,12 @@
 import torch
 import numpy as np
-import smplx
-from smplx.lbs import blend_shapes, vertices2joints
+from human_plan.utils.mano.backend import blend_shapes, vertices2joints
 
 def obtain_mano_pelvis(mano_model):
   betas = torch.zeros(
     10, dtype=torch.float32
   ).unsqueeze(0).to("cpu")
-  v_shaped = mano_model.v_template + \
-    blend_shapes(betas, mano_model.shapedirs)  # type: ignore
+  v_shaped = mano_model.v_template.unsqueeze(0) + blend_shapes(betas, mano_model.shapedirs)  # type: ignore
   pelvis = vertices2joints(
     mano_model.J_regressor[0:1], v_shaped
   ).squeeze(dim=1)
@@ -44,4 +42,3 @@ def estimate_frame_from_hand_points(keypoint_3d_array: np.ndarray) -> np.ndarray
         z *= -1
     frame = np.stack([x, normal, z], axis=1)
     return frame
-

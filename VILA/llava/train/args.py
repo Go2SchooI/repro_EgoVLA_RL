@@ -19,6 +19,12 @@ from typing import Optional
 
 import transformers
 
+try:
+    from accelerate.parallelism_config import ParallelismConfig  # noqa: F401
+except Exception:
+    class ParallelismConfig:  # type: ignore[no-redef]
+        pass
+
 
 @dataclass
 class DataArguments:

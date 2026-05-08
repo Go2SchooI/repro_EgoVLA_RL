@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from smplx.lbs import blend_shapes, vertices2joints
+from human_plan.utils.mano.backend import blend_shapes, vertices2joints
 
 holoassist_to_mano_joint_mapping = np.array([
   1, # wrist 
@@ -87,8 +87,7 @@ def obtain_mano_pelvis(mano_model):
   betas = torch.zeros(
     10, dtype=torch.float32
   ).unsqueeze(0).to("cpu")
-  v_shaped = mano_model.v_template + \
-    blend_shapes(betas, mano_model.shapedirs)  # type: ignore
+  v_shaped = mano_model.v_template.unsqueeze(0) + blend_shapes(betas, mano_model.shapedirs)  # type: ignore
   pelvis = vertices2joints(
     mano_model.J_regressor[0:1], v_shaped
   ).squeeze(dim=1)

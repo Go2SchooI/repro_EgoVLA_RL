@@ -1,13 +1,68 @@
-
+import argparse
+import builtins
+import contextlib
+import importlib
+import math
 import os
+import shutil
+import subprocess
+import sys
 import tqdm
 
-from transformers import HfArgumentParser
-from human_plan.vila_train.args import (
-  VLATrainingArguments, VLAModelArguments, VLADataArguments
-)
-
 from collections import deque
+
+import numpy as np
+
+if not hasattr(builtins, "ParallelismConfig"):
+    class ParallelismConfig:  # pragma: no cover - compatibility shim
+        pass
+
+    builtins.ParallelismConfig = ParallelismConfig
+
+# IsaacLab 5.x exposes the package as `isaaclab`/`isaaclab_tasks` instead of
+# `omni.isaac.lab`/`omni.isaac.lab_tasks`. We alias the commonly used modules so
+# the benchmark code can keep its older import paths.
+def _alias_module(old_name: str, new_name: str):
+    with contextlib.suppress(ModuleNotFoundError, AttributeError):
+        module = importlib.import_module(new_name)
+        sys.modules[old_name] = module
+
+        if "." in old_name:
+            parent_name, child_name = old_name.rsplit(".", 1)
+            parent_module = sys.modules.get(parent_name)
+            if parent_module is None:
+                with contextlib.suppress(ModuleNotFoundError):
+                    parent_module = importlib.import_module(parent_name)
+            if parent_module is not None:
+                setattr(parent_module, child_name, module)
+
+
+def _ensure_isaaclab_aliases():
+    aliases = (
+        ("omni.isaac.lab", "isaaclab"),
+        ("omni.isaac.lab.utils", "isaaclab.utils"),
+        ("omni.isaac.lab.utils.math", "isaaclab.utils.math"),
+        ("omni.isaac.lab.utils.sensors", "isaaclab.utils.sensors"),
+        ("omni.isaac.lab.sim", "isaaclab.sim"),
+        ("omni.isaac.lab.controllers", "isaaclab.controllers"),
+        ("omni.isaac.lab.managers", "isaaclab.managers"),
+        ("omni.isaac.lab.managers.scene_entity_cfg", "isaaclab.managers.scene_entity_cfg"),
+        ("omni.isaac.lab.assets", "isaaclab.assets"),
+        ("omni.isaac.lab.assets.articulation", "isaaclab.assets.articulation"),
+        (
+            "omni.isaac.lab.assets.articulation.articulation_cfg",
+            "isaaclab.assets.articulation.articulation_cfg",
+        ),
+        ("omni.isaac.lab.actuators", "isaaclab.actuators"),
+        ("omni.isaac.lab_tasks", "isaaclab_tasks"),
+        ("omni.isaac.lab_tasks.utils", "isaaclab_tasks.utils"),
+    )
+    for old_name, new_name in aliases:
+        _alias_module(old_name, new_name)
+
+
+_ensure_isaaclab_aliases()
+
 from omni.isaac.lab.app import AppLauncher
 
 # We fix the seed for tasks to make sure the object position during evaluation
@@ -27,6 +82,22 @@ seed_map = {
     "Humanoid-Stack-Can-Into-Drawer-v0": 11,
 }
 
+# Launch the simulator before importing heavyweight ML deps such as transformers.
+app_parser = argparse.ArgumentParser(add_help=False)
+AppLauncher.add_app_launcher_args(app_parser)
+app_parser.set_defaults(headless=True, enable_cameras=True, device="cuda")
+app_args, _ = app_parser.parse_known_args()
+
+# launch omniverse app
+app_launcher = AppLauncher(app_args)
+simulation_app = app_launcher.app
+_ensure_isaaclab_aliases()
+
+from transformers import HfArgumentParser
+from human_plan.vila_train.args import (
+  VLATrainingArguments, VLAModelArguments, VLADataArguments
+)
+
 parser = HfArgumentParser((VLAModelArguments, VLADataArguments, VLATrainingArguments))
 # add argparse arguments
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
@@ -41,24 +112,73 @@ parser.add_argument("--video_saving_path", type=str, default=None, help="video s
 parser.add_argument("--save_frames", type=int, default=0, help="result saving path")
 parser.add_argument("--project_trajs", type=int, default=0, help="result saving path")
 parser.add_argument("--additional_label", type=str, default=None, help="additional_label")
+parser.add_argument(
+    "--max_eval_steps",
+    type=int,
+    default=None,
+    help="Optional eval-only smoke-test cap. None or <=0 keeps the task horizon unchanged.",
+)
+parser.add_argument(
+    "--chunk_exec_len",
+    type=str,
+    default=None,
+    help="Eval-only ablation. Kept for logging; current eval executes one action per model query.",
+)
+parser.add_argument(
+    "--image_update_interval",
+    type=str,
+    default=None,
+    help="Eval-only image ablation. 1/none=normal, K>1=refresh cached image every K env steps, <=0/inf=fixed reset image.",
+)
+parser.add_argument(
+    "--image_delay_steps",
+    type=int,
+    default=0,
+    help="Eval-only image ablation. 0=normal, k>0 feeds the image from k env steps earlier.",
+)
+parser.add_argument(
+    "--proprio_ablation_mode",
+    type=str,
+    default="none",
+    choices=("none", "freeze", "delay"),
+    help="Eval-only proprio ablation. none=normal, freeze=reset proprio, delay=k-step old proprio.",
+)
+parser.add_argument(
+    "--proprio_delay_steps",
+    type=int,
+    default=0,
+    help="Delay in eval env steps when --proprio_ablation_mode=delay.",
+)
+parser.add_argument(
+    "--eval_ablation_debug",
+    action="store_true",
+    help="Print per-step debug information for eval-only ablations.",
+)
+parser.add_argument(
+    "--vision_input_mode",
+    type=str,
+    default="real",
+    choices=("real", "noise", "initial"),
+    help="Image source used by the model during evaluation.",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
-
-# launch omniverse app
-app_launcher = AppLauncher(enable_cameras=True, device="cuda", headless=True)
-simulation_app = app_launcher.app
 
 from human_plan.ego_bench_eval.utils import (
     process_input,
     ik_step,
     ik_eval_single_step,
-    get_language_instruction
+    get_language_instruction,
+    update_eval_success,
 )
 import gymnasium as gym
 import torch
 
-from omni.isaac.lab_tasks.utils import parse_env_cfg
+try:
+    from omni.isaac.lab_tasks.utils import parse_env_cfg
+except ModuleNotFoundError:
+    from isaaclab_tasks.utils import parse_env_cfg
 import torch
 
 from omni.isaac.lab.controllers import DifferentialIKController, DifferentialIKControllerCfg
@@ -71,9 +191,405 @@ from humanoid.tasks.base_env import BaseEnv, BaseEnvCfg
 import cv2
 from human_plan.vila_eval.utils.load_model import load_model_eval
 
+
+def _get_action_dim(env: BaseEnv) -> int:
+    """Compat helper for IsaacLab API changes around action dimensions."""
+    if hasattr(env, "num_actions"):
+        return int(env.num_actions)
+
+    action_space = getattr(env, "action_space", None)
+    if action_space is not None and getattr(action_space, "shape", None):
+        return int(math.prod(action_space.shape))
+
+    cfg = getattr(env, "cfg", None)
+    if cfg is not None:
+        if getattr(cfg, "action_space", None) is not None:
+            action_space = cfg.action_space
+            if isinstance(action_space, int):
+                return int(action_space)
+            if isinstance(action_space, (tuple, list)):
+                return int(math.prod(action_space))
+        if getattr(cfg, "num_actions", None) is not None:
+            return int(cfg.num_actions)
+
+    raise AttributeError("Unable to infer action dimension from environment.")
+
+
+def _make_non_overwriting_path(path: str) -> str:
+    if not os.path.exists(path):
+        return path
+
+    stem, suffix = os.path.splitext(path)
+    index = 1
+    while True:
+        candidate = f"{stem}_{index}{suffix}"
+        if not os.path.exists(candidate):
+            return candidate
+        index += 1
+
+
+def _convert_video_to_h264(output_path: str) -> None:
+    """Convert OpenCV-written MP4 to broadly compatible H.264/AVC."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        print(f"[video] ffmpeg not found; keeping original video: {output_path}")
+        return
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        print(f"[video] skip H.264 conversion because video is missing or empty: {output_path}")
+        return
+
+    stem, suffix = os.path.splitext(output_path)
+    temp_output_path = _make_non_overwriting_path(f"{stem}.h264_tmp{suffix or '.mp4'}")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        output_path,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-an",
+        "-movflags",
+        "+faststart",
+        temp_output_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except (subprocess.CalledProcessError, OSError) as exc:
+        with contextlib.suppress(OSError):
+            os.remove(temp_output_path)
+        stderr = getattr(exc, "stderr", "") or str(exc)
+        print(f"[video] H.264 conversion failed; keeping original video: {output_path}\n{stderr}")
+        return
+
+    os.replace(temp_output_path, output_path)
+    print(f"[video] converted to H.264/AVC libx264 yuv420p without audio: {output_path}")
+
+
+def _apply_task_cfg_overrides(task_name: str, env_cfg: BaseEnvCfg) -> None:
+    # IsaacLab 5 validates articulation defaults during environment creation.
+    # The benchmark's laptop asset uses a legacy default joint position (0.088)
+    # that falls below the current lower joint limit (0.175), so we bump it into
+    # the valid range before gym.make() instantiates the task.
+    if task_name == "Humanoid-Open-Laptop-v0":
+        env_cfg.laptop.init_state.joint_pos = {".*joint": 0.18}
+    elif task_name == "Humanoid-Stack-Can-Into-Drawer-v0":
+        # This task widens both shoulder yaw joints to 1.5 to avoid drawer-door
+        # collisions, but IsaacLab 5 enforces an upper limit of 1.3 during
+        # articulation initialization. Keep the shoulders opened up while
+        # staying safely inside the current joint limits.
+        env_cfg.robot.init_state.joint_pos[".*_shoulder_yaw_joint"] = 1.25
+
+
+def _get_model_rgb_obs(rgb_obs, vision_input_mode: str, initial_rgb_obs, rng):
+    if vision_input_mode == "real":
+        return rgb_obs.copy()
+    if vision_input_mode == "initial":
+        return initial_rgb_obs.copy()
+    if vision_input_mode == "noise":
+        return rng.integers(0, 256, size=rgb_obs.shape, dtype=rgb_obs.dtype)
+    raise ValueError(f"Unsupported vision_input_mode: {vision_input_mode}")
+
+
+def _parse_optional_positive_int(value, name: str):
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    value_str = str(value).strip().lower()
+    if value_str in ("", "none", "null"):
+        return None
+    parsed = int(value_str)
+    return parsed if parsed > 0 else None
+
+
+def _parse_image_update_interval(value):
+    if value is None:
+        return 1
+    value_str = str(value).strip().lower()
+    if value_str in ("", "none", "null"):
+        return 1
+    if value_str in ("inf", "infinite", "infinity"):
+        return 0
+    parsed = int(value_str)
+    return parsed
+
+
+def _copy_image_like(image):
+    if hasattr(image, "detach"):
+        return image.detach().clone()
+    return image.copy()
+
+
+def _copy_value(value):
+    if hasattr(value, "detach"):
+        return value.detach().clone()
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, dict):
+        return {key: _copy_value(item) for key, item in value.items()}
+    return value
+
+
+def _copy_proprio_pack(proprio_pack):
+    return {key: _copy_value(value) for key, value in proprio_pack.items()}
+
+
+def _image_mean_abs_diff(a, b):
+    if hasattr(a, "detach"):
+        return (a.to(torch.float32) - b.to(torch.float32)).abs().mean().item()
+    return float(np.mean(np.abs(a.astype(np.float32) - b.astype(np.float32))))
+
+
+def _proprio_mean_abs_diff(current_pack, used_pack):
+    current = current_pack["proprio_input"]
+    used = used_pack["proprio_input"]
+    if hasattr(current, "detach"):
+        return (current.to(torch.float32) - used.to(torch.float32)).abs().mean().item()
+    return float(np.mean(np.abs(current.astype(np.float32) - used.astype(np.float32))))
+
+
+class ImageAblationBuffer:
+    """Eval-only image freeze/update/delay state for the model RGB input."""
+
+    def __init__(self, image_update_interval=1, image_delay_steps=0, debug=False):
+        self.image_update_interval = _parse_image_update_interval(image_update_interval)
+        self.image_delay_steps = int(image_delay_steps or 0)
+        self.debug = debug
+        self.cached_image = None
+        self.history = []
+        self.step = 0
+        self.diff_sum = 0.0
+        self.diff_count = 0
+
+        update_active = self.image_update_interval <= 0 or self.image_update_interval > 1
+        if update_active and self.image_delay_steps > 0:
+            raise ValueError(
+                "image_update_interval and image_delay_steps are mutually exclusive for eval ablations. "
+                "Please enable only one so the experiment remains interpretable."
+            )
+        if self.image_delay_steps < 0:
+            raise ValueError("image_delay_steps must be >= 0.")
+
+    @property
+    def enabled(self):
+        return (
+            self.image_delay_steps > 0
+            or self.image_update_interval <= 0
+            or self.image_update_interval > 1
+        )
+
+    @property
+    def mode(self):
+        if self.image_delay_steps > 0:
+            return f"delay_{self.image_delay_steps}"
+        if self.image_update_interval <= 0:
+            return "fixed_initial"
+        if self.image_update_interval > 1:
+            return f"update_every_{self.image_update_interval}"
+        return "normal"
+
+    def reset(self, image):
+        image_copy = _copy_image_like(image)
+        self.cached_image = image_copy
+        self.history = [image_copy]
+        self.step = 0
+        self.diff_sum = 0.0
+        self.diff_count = 0
+
+    def apply(self, image):
+        if self.cached_image is None:
+            self.reset(image)
+
+        current = _copy_image_like(image)
+        used = current
+        source = "current"
+
+        if self.image_delay_steps > 0:
+            self.history.append(current)
+            used_index = max(0, len(self.history) - 1 - self.image_delay_steps)
+            used = self.history[used_index]
+            source = f"history[{used_index}]"
+        elif self.image_update_interval <= 0:
+            used = self.cached_image
+            source = "reset"
+        elif self.image_update_interval > 1:
+            if self.step % self.image_update_interval == 0:
+                self.cached_image = current
+                source = "updated"
+            else:
+                source = "cached"
+            used = self.cached_image
+
+        used = _copy_image_like(used)
+        diff = _image_mean_abs_diff(current, used)
+        self.diff_sum += diff
+        self.diff_count += 1
+        if self.debug:
+            print(
+                f"[eval-ablation:image] step={self.step} mode={self.mode} source={source} "
+                f"mean_abs_diff={diff:.6f}"
+            )
+        self.step += 1
+        return used
+
+    def mean_abs_diff(self):
+        if self.diff_count == 0:
+            return 0.0
+        return self.diff_sum / self.diff_count
+
+
+class ProprioAblationBuffer:
+    """Eval-only proprio freeze/delay state for the model proprio input."""
+
+    def __init__(self, mode="none", delay_steps=0, debug=False):
+        self.mode = mode
+        self.delay_steps = int(delay_steps or 0)
+        self.debug = debug
+        self.initial_proprio = None
+        self.history = []
+        self.step = 0
+        self.diff_sum = 0.0
+        self.diff_count = 0
+
+        if self.mode not in ("none", "freeze", "delay"):
+            raise ValueError(f"Unsupported proprio_ablation_mode: {self.mode}")
+        if self.delay_steps < 0:
+            raise ValueError("proprio_delay_steps must be >= 0.")
+        if self.mode == "delay" and self.delay_steps <= 0:
+            raise ValueError("proprio_ablation_mode='delay' requires proprio_delay_steps > 0.")
+
+    @property
+    def enabled(self):
+        return self.mode != "none"
+
+    def reset(self, proprio_pack):
+        pack_copy = _copy_proprio_pack(proprio_pack)
+        self.initial_proprio = pack_copy
+        self.history = [pack_copy]
+        self.step = 0
+        self.diff_sum = 0.0
+        self.diff_count = 0
+
+    def apply(self, proprio_pack):
+        if "proprio_input" not in proprio_pack:
+            raise KeyError(
+                "Eval proprio ablation expected a 'proprio_input' key in the processed proprio pack, "
+                f"but available keys are: {sorted(proprio_pack.keys())}"
+            )
+        if self.mode == "none":
+            return proprio_pack
+        if self.initial_proprio is None:
+            self.reset(proprio_pack)
+
+        current = _copy_proprio_pack(proprio_pack)
+        used = current
+        source = "current"
+
+        if self.mode == "freeze":
+            used = self.initial_proprio
+            source = "reset"
+        elif self.mode == "delay":
+            self.history.append(current)
+            used_index = max(0, len(self.history) - 1 - self.delay_steps)
+            used = self.history[used_index]
+            source = f"history[{used_index}]"
+
+        used = _copy_proprio_pack(used)
+        diff = _proprio_mean_abs_diff(current, used)
+        self.diff_sum += diff
+        self.diff_count += 1
+        if self.debug:
+            print(
+                f"[eval-ablation:proprio] step={self.step} mode={self.mode} source={source} "
+                f"mean_abs_diff={diff:.6f}"
+            )
+        self.step += 1
+        return used
+
+    def mean_abs_diff(self):
+        if self.diff_count == 0:
+            return 0.0
+        return self.diff_sum / self.diff_count
+
+
+PROPRIO_ENV_KEYS = (
+    "left_finger_tip_pos",
+    "right_finger_tip_pos",
+    "left_ee_pose",
+    "right_ee_pose",
+    "qpos",
+)
+
+
+PROPRIO_MODEL_KEYS = (
+    "proprio_input",
+    "proprio_input_2d",
+    "proprio_input_3d",
+    "proprio_input_rot",
+    "proprio_input_handdof",
+    "proprio_input_hand_finger_tip",
+)
+
+
+def _assert_proprio_env_keys(env_obs):
+    missing_keys = [key for key in PROPRIO_ENV_KEYS if key not in env_obs]
+    if missing_keys:
+        raise KeyError(
+            "Eval proprio ablation could not find required proprio env observation keys. "
+            f"missing={missing_keys}, available={sorted(env_obs.keys())}"
+        )
+
+
+def _make_proprio_pack(proprio_input, raw_proprio_inputs):
+    proprio_pack = {"proprio_input": proprio_input}
+    proprio_pack.update(raw_proprio_inputs)
+    missing_model_keys = [key for key in PROPRIO_MODEL_KEYS if key not in proprio_pack]
+    if missing_model_keys:
+        raise KeyError(
+            "Eval proprio ablation could not find required processed proprio keys. "
+            f"missing={missing_model_keys}, available={sorted(proprio_pack.keys())}"
+        )
+    return proprio_pack
+
+
+def _raw_proprio_from_pack(proprio_pack):
+    return {key: value for key, value in proprio_pack.items() if key != "proprio_input"}
+
+
+def _format_action_shape(action_dict):
+    return {
+        key: tuple(value.shape)
+        for key, value in action_dict.items()
+        if key in ("left_ee_pose", "right_ee_pose", "left_qpos_multi_step", "right_qpos_multi_step")
+        and hasattr(value, "shape")
+    }
+
 def main():
 
     model_args, data_args, training_args, task_args = parser.parse_args_into_dataclasses()
+    chunk_exec_len = _parse_optional_positive_int(task_args.chunk_exec_len, "chunk_exec_len")
+    image_update_interval = _parse_image_update_interval(task_args.image_update_interval)
+    image_delay_steps = int(task_args.image_delay_steps or 0)
+    proprio_ablation_mode = task_args.proprio_ablation_mode
+    proprio_delay_steps = int(task_args.proprio_delay_steps or 0)
+    image_update_active = image_update_interval <= 0 or image_update_interval > 1
+    if image_update_active and image_delay_steps > 0:
+      raise ValueError(
+        "image_update_interval and image_delay_steps are mutually exclusive for eval ablations. "
+        "Please enable only one so the experiment remains interpretable."
+      )
+    if image_delay_steps < 0:
+      raise ValueError("image_delay_steps must be >= 0.")
+    if proprio_delay_steps < 0:
+      raise ValueError("proprio_delay_steps must be >= 0.")
+    if proprio_ablation_mode == "delay" and proprio_delay_steps <= 0:
+      raise ValueError("proprio_ablation_mode='delay' requires proprio_delay_steps > 0.")
 
     model, tokenizer, model_args, data_args, training_args = load_model_eval(
       model_args, data_args, training_args
@@ -109,6 +625,7 @@ def main():
 
     env_cfg.episode_length_s = 60 # 60 seconds episode length -> For long horizon tasks
     env_cfg.randomize = True
+    _apply_task_cfg_overrides(task_args.task, env_cfg)
     # create environment
     env_cfg.spawn_background =True
     # select background
@@ -120,22 +637,37 @@ def main():
         task_args.task,
         cfg=env_cfg
     )
-    env.cfg.randomize_idx = randomize_idxes[curr_random_idx]
+    base_env: BaseEnv = env.unwrapped
+
+    base_env.cfg.randomize_idx = randomize_idxes[curr_random_idx]
     env.reset()
 
     # IK controllers
     command_type = "pose"
     left_ik_cfg = DifferentialIKControllerCfg(command_type=command_type, use_relative_mode=False, ik_method="dls")
-    left_ik_controller = DifferentialIKController(left_ik_cfg, num_envs=env.scene.num_envs, device=env.sim.device)
+    left_ik_controller = DifferentialIKController(
+        left_ik_cfg, num_envs=base_env.scene.num_envs, device=base_env.sim.device
+    )
     right_ik_cfg = DifferentialIKControllerCfg(command_type=command_type, use_relative_mode=False, ik_method="pinv")
-    right_ik_controller = DifferentialIKController(right_ik_cfg, num_envs=env.scene.num_envs, device=env.sim.device)
+    right_ik_controller = DifferentialIKController(
+        right_ik_cfg, num_envs=base_env.scene.num_envs, device=base_env.sim.device
+    )
 
     # Create buffers to store actions
-    left_ik_commands_world = torch.zeros(env.scene.num_envs, left_ik_controller.action_dim, device=env.robot.device)
-    left_ik_commands_robot = torch.zeros(env.scene.num_envs, left_ik_controller.action_dim, device=env.robot.device)
-    right_ik_commands_world = torch.zeros(env.scene.num_envs, right_ik_controller.action_dim, device=env.robot.device)
-    right_ik_commands_robot = torch.zeros(env.scene.num_envs, right_ik_controller.action_dim, device=env.robot.device)
-    action = torch.zeros((env.scene.num_envs, env.num_actions), device=env.robot.device)
+    left_ik_commands_world = torch.zeros(
+        base_env.scene.num_envs, left_ik_controller.action_dim, device=base_env.robot.device
+    )
+    left_ik_commands_robot = torch.zeros(
+        base_env.scene.num_envs, left_ik_controller.action_dim, device=base_env.robot.device
+    )
+    right_ik_commands_world = torch.zeros(
+        base_env.scene.num_envs, right_ik_controller.action_dim, device=base_env.robot.device
+    )
+    right_ik_commands_robot = torch.zeros(
+        base_env.scene.num_envs, right_ik_controller.action_dim, device=base_env.robot.device
+    )
+    action_dim = _get_action_dim(base_env)
+    action = torch.zeros((base_env.scene.num_envs, action_dim), device=base_env.robot.device)
 
     save_path = os.path.join(
       task_args.video_saving_path,
@@ -167,6 +699,29 @@ def main():
     ])
 
     padding = 0
+    vision_rng = np.random.default_rng(seed_map[task_args.task])
+    print(
+      "[eval-ablation] "
+      f"chunk_exec_len={chunk_exec_len} "
+      f"image_update_interval={image_update_interval} "
+      f"image_delay_steps={image_delay_steps} "
+      f"proprio_ablation_mode={proprio_ablation_mode} "
+      f"proprio_delay_steps={proprio_delay_steps} "
+      f"vision_input_mode={task_args.vision_input_mode}"
+    )
+    print(
+      "[eval-ablation] image source key: env_results[0]['fixed_rgb'] -> raw_data_dict['image']; "
+      "current eval executes one env.step per model query."
+    )
+    print(
+      "[eval-ablation] proprio source keys: "
+      f"env={PROPRIO_ENV_KEYS} -> raw_data_dict['proprio_input'] and raw proprio branches."
+    )
+    if chunk_exec_len is not None:
+      print(
+        "[eval-ablation:chunk] current eval is already single-step/receding-horizon execution; "
+        "chunk_exec_len is recorded as a no-op instead of changing rollout semantics."
+      )
 
     # with torch.inference_mode():
     for episode_idx in episode_list:
@@ -181,6 +736,24 @@ def main():
         action_hist_right_ee = deque(maxlen=hist_len)
         action_hist_left_hand = deque(maxlen=hist_len)
         action_hist_right_hand = deque(maxlen=hist_len)
+        image_ablation = ImageAblationBuffer(
+          image_update_interval=image_update_interval,
+          image_delay_steps=image_delay_steps,
+          debug=task_args.eval_ablation_debug,
+        )
+        proprio_ablation = ProprioAblationBuffer(
+          mode=proprio_ablation_mode,
+          delay_steps=proprio_delay_steps,
+          debug=task_args.eval_ablation_debug,
+        )
+        action_norm_sum = 0.0
+        action_delta_norm_sum = 0.0
+        action_stat_count = 0
+        prev_action_for_stats = None
+        logged_action_shape = False
+        logged_proprio_shape = False
+        action_chunk_horizon = None
+        action_exec_len = 1
 
         seq_save_path = os.path.join(
           save_path,
@@ -194,11 +767,13 @@ def main():
           seq_save_path,
           f"{task_name}_room_{room_idx}_table_{table_idx}_episode_{episode_idx}_{trial_idx}.mp4"
         )
+        output_path = _make_non_overwriting_path(output_path)
         if task_args.save_frames:
           frames_output_path = os.path.join(
             seq_save_path,
             f"{task_name}_room_{room_idx}_table_{table_idx}_episode_{episode_idx}_{trial_idx}"
           )
+          frames_output_path = _make_non_overwriting_path(frames_output_path)
           Path(frames_output_path).mkdir(exist_ok=True, parents=True)
         fps = 15
         out = cv2.VideoWriter(
@@ -212,7 +787,7 @@ def main():
         if True:
             # reset
           curr_random_idx += 1
-          env.cfg.randomize_idx = randomize_idxes[curr_random_idx]
+          base_env.cfg.randomize_idx = randomize_idxes[curr_random_idx]
           env_results = env.reset()
           left_ik_controller.reset()
           right_ik_controller.reset()
@@ -250,16 +825,27 @@ def main():
             env_results = env.step(action)
             rgb_obs = env_results[0]["fixed_rgb"][0].cpu().numpy()[:, :, :]
             rgb_obs = cv2.resize(rgb_obs, (384, 384))
-        rgb_obs_hist.append(rgb_obs)
+        initial_rgb_obs = rgb_obs.copy()
+        initial_model_rgb_obs = _get_model_rgb_obs(
+          rgb_obs, task_args.vision_input_mode, initial_rgb_obs, vision_rng
+        )
+        image_ablation.reset(initial_model_rgb_obs)
+        rgb_obs_hist.append(
+          image_ablation.apply(initial_model_rgb_obs)
+        )
         count = padding
 
         result = False
+        success_streak = 0
         from human_plan.ego_bench_eval.utils import TASK_MAX_HORIZON
         max_horizon = TASK_MAX_HORIZON[task_args.task]
+        if task_args.max_eval_steps is not None and task_args.max_eval_steps > 0:
+          max_horizon = min(max_horizon, task_args.max_eval_steps)
 
         for i in tqdm.tqdm(range(max_horizon)):
           # run everything in inference mode
           # obtain quantities from simulation
+          _assert_proprio_env_keys(env_results[0])
           rgb_obs = env_results[0]["fixed_rgb"][0].cpu().numpy()[:, :, :]
 
           from human_plan.ego_bench_eval.utils import process_proprio_input
@@ -273,9 +859,18 @@ def main():
             cam_intrinsics,
             input_hand_dof=data_args.input_hand_dof
           )
+          proprio_pack = _make_proprio_pack(proprio_input, raw_proprio_inputs)
+          used_proprio_pack = proprio_ablation.apply(proprio_pack)
+          used_proprio_input = used_proprio_pack["proprio_input"]
+          used_raw_proprio_inputs = _raw_proprio_from_pack(used_proprio_pack)
 
           rgb_obs = cv2.resize(rgb_obs, (384, 384))
-          rgb_obs_hist.append(rgb_obs)
+          model_rgb_obs = _get_model_rgb_obs(
+            rgb_obs, task_args.vision_input_mode, initial_rgb_obs, vision_rng
+          )
+          rgb_obs_hist.append(
+            image_ablation.apply(model_rgb_obs)
+          )
 
           raw_language_instruction = get_language_instruction(
               task_args.task
@@ -283,17 +878,45 @@ def main():
 
           raw_data_dict = process_input(
               rgb_obs_hist, 
-              proprio_input.to("cuda"),
+              used_proprio_input.to("cuda"),
               raw_language_instruction,
               data_args, model_args, tokenizer
           )
+          if "image" not in raw_data_dict:
+            raise KeyError(
+              "Eval image ablation expected process_input() to produce raw_data_dict['image'], "
+              f"but available keys are: {sorted(raw_data_dict.keys())}"
+            )
 
-          raw_data_dict.update(raw_proprio_inputs)
+          raw_data_dict.update(used_raw_proprio_inputs)
           with torch.inference_mode():
             action_dict = ik_eval_single_step(
                 raw_data_dict,
                 model, tokenizer,
             )
+
+          if action_chunk_horizon is None:
+            action_chunk_horizon = int(action_dict["left_ee_pose"].shape[0])
+            requested_exec_len = action_chunk_horizon if chunk_exec_len is None else min(
+              chunk_exec_len, action_chunk_horizon
+            )
+            print(
+              "[eval-ablation:chunk] "
+              f"action_chunk_shape={_format_action_shape(action_dict)} "
+              f"horizon_H={action_chunk_horizon} requested_m={requested_exec_len} "
+              f"actual_env_steps_per_query={action_exec_len}"
+            )
+          if not logged_action_shape:
+            print(f"[eval-ablation:image] model image tensor key='image' shape={tuple(raw_data_dict['image'].shape)}")
+            logged_action_shape = True
+          if not logged_proprio_shape:
+            print(
+              "[eval-ablation:proprio] "
+              f"mode={proprio_ablation.mode} delay_steps={proprio_ablation.delay_steps} "
+              f"model_key='proprio_input' shape={tuple(raw_data_dict['proprio_input'].shape)} "
+              f"env_keys={PROPRIO_ENV_KEYS}"
+            )
+            logged_proprio_shape = True
 
           from human_plan.ego_bench_eval.utils import smooth_action, repeat_action
           action_hist_right_ee.append(
@@ -345,9 +968,21 @@ def main():
               action
           )
           env_results = env.step(action)
+          current_action_for_stats = action.detach().clone()
+          action_norm_sum += current_action_for_stats.norm(dim=-1).mean().item()
+          if prev_action_for_stats is not None:
+            action_delta_norm_sum += (
+              current_action_for_stats - prev_action_for_stats
+            ).norm(dim=-1).mean().item()
+          prev_action_for_stats = current_action_for_stats
+          action_stat_count += 1
 
-          # Success 
-          if env_results[0]["success"].sum().item() == 1:
+          success_reached, success_streak = update_eval_success(
+            task_args.task, base_env, env_results, success_streak
+          )
+
+          # Success
+          if success_reached:
             result = True
             break
 
@@ -389,6 +1024,26 @@ def main():
 
         with open(task_args.result_saving_path, "a") as f:
           f.write(f"Task: {task_name}, Room Idx: {room_idx}, Table Idx: {table_idx}, Episode Label: {episode_idx[0]}, Trial Label: {trial_idx}, Result: {result} \n")
+          avg_action_norm = action_norm_sum / max(action_stat_count, 1)
+          avg_action_delta_norm = action_delta_norm_sum / max(action_stat_count - 1, 1)
+          f.write(
+            "eval_ablation: "
+            f"chunk_exec_len={chunk_exec_len} "
+            f"action_chunk_horizon={action_chunk_horizon} "
+            f"actual_exec_len={action_exec_len} "
+            f"image_update_interval={image_update_interval} "
+            f"image_delay_steps={image_delay_steps} "
+            f"image_mode={image_ablation.mode} "
+            f"image_key=image "
+            f"proprio_ablation_mode={proprio_ablation.mode} "
+            f"proprio_delay_steps={proprio_ablation.delay_steps} "
+            f"proprio_key=proprio_input "
+            f"episode_length={action_stat_count} "
+            f"action_norm_mean={avg_action_norm:.6f} "
+            f"action_delta_norm_mean={avg_action_delta_norm:.6f} "
+            f"image_mean_abs_diff={image_ablation.mean_abs_diff():.6f} "
+            f"proprio_mean_abs_diff={proprio_ablation.mean_abs_diff():.6f}\n"
+          )
           subtask_string = ""
           for key in env_results[0].keys():
             if "success" in key:
@@ -397,6 +1052,7 @@ def main():
           f.write(subtask_string)
           
         out.release()
+        _convert_video_to_h264(output_path)
         # close the simulator
     env.close()
 

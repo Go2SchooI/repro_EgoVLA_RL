@@ -143,7 +143,7 @@ def load_pretrained_model(
             tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         if mm_use_im_start_end:
             tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
-        model.resize_token_embeddings(len(tokenizer))
+        model.resize_token_embeddings(len(tokenizer), mean_resizing=False)
         vision_tower = model.get_vision_tower()
         vision_tower.to(device=device, dtype=torch.float16)
         # vision_tower.to(device=device, dtype=torch.bfloat16)
