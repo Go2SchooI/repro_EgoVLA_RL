@@ -17,6 +17,7 @@ NUM_EPISODES="${NUM_EPISODES:-1}"
 NUM_TRIALS="${NUM_TRIALS:-1}"
 SMOOTH_WEIGHT="${SMOOTH_WEIGHT:-0.2}"
 HAND_SMOOTH_WEIGHT="${HAND_SMOOTH_WEIGHT:-0.8}"
+SAVE_VIDEO="${SAVE_VIDEO:-1}"
 SAVE_FRAMES="${SAVE_FRAMES:-0}"
 PROJECT_TRAJS="${PROJECT_TRAJS:-0}"
 VISION_INPUT_MODE="${VISION_INPUT_MODE:-real}"
@@ -27,6 +28,14 @@ IMAGE_DELAY_STEPS="${IMAGE_DELAY_STEPS:-0}"
 PROPRIO_ABLATION_MODE="${PROPRIO_ABLATION_MODE:-none}"
 PROPRIO_DELAY_STEPS="${PROPRIO_DELAY_STEPS:-0}"
 EVAL_ABLATION_DEBUG="${EVAL_ABLATION_DEBUG:-0}"
+RL_MODE="${RL_MODE:-off}"
+RL_ACTION_TRACE="${RL_ACTION_TRACE:-0}"
+RL_ACTION_TRACE_STEPS="${RL_ACTION_TRACE_STEPS:-2}"
+RL_IDENTITY_TOLERANCE="${RL_IDENTITY_TOLERANCE:-1e-5}"
+RL_ACTOR_CHECKPOINT="${RL_ACTOR_CHECKPOINT:-}"
+RL_COLLECT_REPLAY_PATH="${RL_COLLECT_REPLAY_PATH:-}"
+RL_COLLECT_SOURCE="${RL_COLLECT_SOURCE:-base}"
+RL_COLLECT_SAVE_RAW="${RL_COLLECT_SAVE_RAW:-0}"
 
 MODEL_PATH="${MODEL_PATH:-$REPO_ROOT/checkpoints/ego_vla_checkpoint/ckpt-human-video-pretrained}"
 DEFAULT_ADDITIONAL_LABEL="$(basename "${MODEL_PATH%/}")"
@@ -71,12 +80,21 @@ echo "Video root: $VIDEO_ROOT"
 echo "Result file: $RESULT_PATH"
 echo "Additional label: $ADDITIONAL_LABEL"
 echo "Vision input mode: $VISION_INPUT_MODE"
+echo "Save video: $SAVE_VIDEO"
+echo "Save frames: $SAVE_FRAMES"
+echo "Project trajs: $PROJECT_TRAJS"
 echo "Max eval steps: $MAX_EVAL_STEPS"
 echo "Chunk exec len: $CHUNK_EXEC_LEN"
 echo "Image update interval: $IMAGE_UPDATE_INTERVAL"
 echo "Image delay steps: $IMAGE_DELAY_STEPS"
 echo "Proprio ablation mode: $PROPRIO_ABLATION_MODE"
 echo "Proprio delay steps: $PROPRIO_DELAY_STEPS"
+echo "RL mode: $RL_MODE"
+echo "RL action trace: $RL_ACTION_TRACE"
+echo "RL action trace steps: $RL_ACTION_TRACE_STEPS"
+echo "RL actor checkpoint: $RL_ACTOR_CHECKPOINT"
+echo "RL collect replay path: $RL_COLLECT_REPLAY_PATH"
+echo "RL collect source: $RL_COLLECT_SOURCE"
 
 if [[ "${TERM:-dumb}" == "dumb" ]]; then
   export TERM=xterm
@@ -164,6 +182,7 @@ export PYTHONPATH="$VENDOR_PY:$REPO_ROOT:$REPO_ROOT/VILA:$REPO_ROOT/manopth${PYT
   --num_episodes "$NUM_EPISODES" \
   --num_trials "$NUM_TRIALS" \
   --result_saving_path "$RESULT_PATH" \
+  --save_video "$SAVE_VIDEO" \
   --save_frames "$SAVE_FRAMES" \
   --project_trajs "$PROJECT_TRAJS" \
   --vision_input_mode "$VISION_INPUT_MODE" \
@@ -173,6 +192,14 @@ export PYTHONPATH="$VENDOR_PY:$REPO_ROOT:$REPO_ROOT/VILA:$REPO_ROOT/manopth${PYT
   --image_delay_steps "$IMAGE_DELAY_STEPS" \
   --proprio_ablation_mode "$PROPRIO_ABLATION_MODE" \
   --proprio_delay_steps "$PROPRIO_DELAY_STEPS" \
+  --rl_mode "$RL_MODE" \
+  --rl_action_trace_steps "$RL_ACTION_TRACE_STEPS" \
+  --rl_identity_tolerance "$RL_IDENTITY_TOLERANCE" \
+  --rl_collect_source "$RL_COLLECT_SOURCE" \
+  $([[ "$RL_ACTION_TRACE" == "1" ]] && printf '%s' "--rl_action_trace") \
+  $([[ -n "$RL_ACTOR_CHECKPOINT" ]] && printf '%s %q' "--rl_actor_checkpoint" "$RL_ACTOR_CHECKPOINT") \
+  $([[ -n "$RL_COLLECT_REPLAY_PATH" ]] && printf '%s %q' "--rl_collect_replay_path" "$RL_COLLECT_REPLAY_PATH") \
+  $([[ "$RL_COLLECT_SAVE_RAW" == "1" ]] && printf '%s' "--rl_collect_save_raw") \
   $([[ "$EVAL_ABLATION_DEBUG" == "1" ]] && printf '%s' "--eval_ablation_debug") \
   --hand_smooth_weight "$HAND_SMOOTH_WEIGHT" \
   --video_saving_path "$VIDEO_ROOT" \

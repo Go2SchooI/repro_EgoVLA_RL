@@ -228,8 +228,75 @@ bash human_plan/ego_bench_eval/fullpretrain_p30_h5_transv2.sh Humanoid-Push-Box-
 python human_plan/ego_bench_eval/batch_script_30hz.py
 ```
 
+## RL Posttrain: TD3+BC Conservative Correction
+
+All simulator-facing RL posttrain commands must run from the IsaacLab environment:
+
+```bash
+conda activate env_isaaclab
+```
+
+Stage 0/1 action trace and identity eval keep the original EgoVLA behavior but route actions through the post-smoothing RL insertion point:
+
+```bash
+conda activate env_isaaclab
+RL_MODE=identity RL_ACTION_TRACE=1 RL_ACTION_TRACE_STEPS=1 \
+NUM_EPISODES=1 NUM_TRIALS=1 MAX_EVAL_STEPS=1 \
+SAVE_VIDEO=0 SAVE_FRAMES=0 PROJECT_TRAJS=0 \
+./run_local_eval.sh
+```
+
+Stage 2 base replay collection writes canonical normalized action fields. The replay stores raw packed actions as `*_raw`, fits an `action_normalizer` from `bc_target_raw`, rewrites `action_norm`, `bc_target_norm`, `next_bc_target_norm`, and saves the normalizer in the `.npz`. Older replays without `action_normalizer_*` fields should be recollected.
+
+```bash
+conda activate env_isaaclab
+RL_MODE=identity \
+RL_COLLECT_REPLAY_PATH=playground_eval/replays/base_replay.npz \
+RL_COLLECT_SOURCE=base \
+SAVE_VIDEO=0 SAVE_FRAMES=0 PROJECT_TRAJS=0 \
+./run_local_eval.sh
+```
+
+The `rl_posttrain.collect_base` wrapper disables mp4 recording by default. Add `--save_video` only when you intentionally want collection videos.
+
+Stage 3 pure BC training:
+
+```bash
+conda activate env_isaaclab
+python -m rl_posttrain.td3bc_ref \
+  --replay playground_eval/replays/base_replay.npz \
+  --output playground_eval/rl_checkpoints/pure_bc.pt \
+  --td3bc_alpha 0.0 --td3bc_bc_weight 1.0
+```
+
+Stage 4 actor eval and paired eval:
+
+```bash
+conda activate env_isaaclab
+RL_MODE=actor \
+RL_ACTOR_CHECKPOINT=playground_eval/rl_checkpoints/pure_bc.pt \
+SAVE_VIDEO=1 SAVE_FRAMES=0 PROJECT_TRAJS=0 \
+./run_local_eval.sh
+
+conda activate env_isaaclab
+python -m rl_posttrain.paired_eval \
+  --actor_checkpoint playground_eval/rl_checkpoints/pure_bc.pt
+```
+
+`paired_eval` records mp4 videos by default under each mode's `videos/` directory; pass `--no_save_video` to disable that.
+
+Stage 5 weak-Q TD3+BC should be tried only after pure BC paired eval is safe:
+
+```bash
+conda activate env_isaaclab
+python -m rl_posttrain.td3bc_ref \
+  --replay playground_eval/replays/base_replay.npz \
+  --output playground_eval/rl_checkpoints/td3bc_alpha01.pt \
+  --td3bc_alpha 0.1 --td3bc_bc_weight 1.0
+```
+
 ### Note:
-The code hasn't been fully tested yet: There might be some hard-coded path issue. Let me know if there is any issues.
+The original benchmark/eval scripts may still depend on local IsaacLab, checkpoint, and asset paths. The RL posttrain wrappers above have been smoke-tested on Push-Box and Insert-Cans, but new machines or tasks may still need path/environment adjustments.
 
 This software is part of the BAIR Commons HIC Repository as of calendar year 2025.
 

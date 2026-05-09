@@ -204,7 +204,25 @@ def get_language_instruction(task):
   return LANGUAGE_MAPPING[task_name]
 
 
+def sanitize_task_success(task_name, base_env, env_results):
+  if task_name == "Humanoid-Open-Laptop-v0" and hasattr(base_env, "laptop"):
+    laptop_upper = base_env.laptop.data.joint_limits[:, 0, 1]
+    laptop_joint_pos = base_env.laptop.data.joint_pos[:, 0]
+    success = laptop_joint_pos > laptop_upper * 0.7
+    move_lid_success = laptop_joint_pos > laptop_upper * 0.15
+    success = success.to(device=base_env.device, dtype=torch.float32)
+    move_lid_success = move_lid_success.to(device=base_env.device, dtype=torch.float32)
+    env_results[0]["success"] = success
+    env_results[0]["move_lid_success"] = move_lid_success
+    if hasattr(base_env, "success"):
+      base_env.success[:] = success
+    if hasattr(base_env, "move_lid_success"):
+      base_env.move_lid_success[:] = move_lid_success
+  return env_results
+
+
 def update_eval_success(task_name, base_env, env_results, success_streak):
+  env_results = sanitize_task_success(task_name, base_env, env_results)
   success_tensor = env_results[0]["success"]
   if task_name != "Humanoid-Flip-Mug-v0":
     return success_tensor.sum().item() == 1, success_streak
@@ -761,6 +779,7 @@ def ik_eval_single_step(
   )
 
   return dict(
+    raw_pred = pred,
     left_ee_pose = left_ee_pose,
     right_ee_pose = right_ee_pose,
     left_qpos = left_qpos,

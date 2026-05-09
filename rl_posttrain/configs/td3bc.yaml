@@ -1,0 +1,29 @@
+rl:
+  enabled: true
+  algo: td3bc_ref
+  actor_insert_point: after_temporal_smoothing
+  feature_hook: traj_decoder_input
+  freeze_egovla: true
+  cache_rl_features: true
+  replay_filter: base_only
+  bc_target: canonical_action_norm_from_bc_target_raw
+  td3bc_alpha: 0.0
+  td3bc_bc_weight: 1.0
+  td3bc_use_q_abs_norm: true
+  actor_hidden_dims: [1024, 1024, 512]
+  critic_hidden_dims: [1024, 1024, 512]
+  policy_delay: 2
+  target_noise: 0.2
+  noise_clip: 0.5
+  gamma: 0.99
+  tau: 0.005
+  batch_size: 256
+  lr_actor: 3.0e-4
+  lr_critic: 3.0e-4
+  action_norm_clip: 1.0
+  obs_normalize: true
+  action_normalize: true
+  save_every: 10000
+  log_every: 100
+  isaac_env_name: env_isaaclab
+  isaac_version_note: "Use current repo API style; do not assume IsaacLab 2.x/3.x API."

@@ -2,6 +2,7 @@ import argparse
 import builtins
 import contextlib
 import importlib
+import json
 import math
 import os
 import shutil
@@ -109,6 +110,7 @@ parser.add_argument("--num_episodes", type=int, default=None, help="episode_labe
 parser.add_argument("--num_trials", type=int, default=None, help="trial label")
 parser.add_argument("--result_saving_path", type=str, default=None, help="result saving path")
 parser.add_argument("--video_saving_path", type=str, default=None, help="video saving path")
+parser.add_argument("--save_video", type=int, default=1, help="save episode mp4 video")
 parser.add_argument("--save_frames", type=int, default=0, help="result saving path")
 parser.add_argument("--project_trajs", type=int, default=0, help="result saving path")
 parser.add_argument("--additional_label", type=str, default=None, help="additional_label")
@@ -161,6 +163,57 @@ parser.add_argument(
     choices=("real", "noise", "initial"),
     help="Image source used by the model during evaluation.",
 )
+parser.add_argument(
+    "--rl_mode",
+    type=str,
+    default="off",
+    choices=("off", "identity", "actor"),
+    help=(
+        "Offline-RL correction mode. 'identity' routes through the RL insertion path "
+        "with a_exec=a_ref; 'actor' applies a TD3+BC checkpoint after smoothing."
+    ),
+)
+parser.add_argument(
+    "--rl_actor_checkpoint",
+    type=str,
+    default=None,
+    help="TD3+BC actor checkpoint used when --rl_mode=actor.",
+)
+parser.add_argument(
+    "--rl_action_trace",
+    action="store_true",
+    help="Print Stage-0 action path tracing logs at the post-smoothing RL insertion point.",
+)
+parser.add_argument(
+    "--rl_action_trace_steps",
+    type=int,
+    default=2,
+    help="Number of eval steps to print Stage-0 action trace logs for.",
+)
+parser.add_argument(
+    "--rl_identity_tolerance",
+    type=float,
+    default=1.0e-5,
+    help="Max allowed pack/unpack identity error before raising in identity mode.",
+)
+parser.add_argument(
+    "--rl_collect_replay_path",
+    type=str,
+    default=None,
+    help="Optional Stage-2 replay path. When set, saves base/identity transitions as .npz.",
+)
+parser.add_argument(
+    "--rl_collect_source",
+    type=str,
+    default="base",
+    choices=("base", "identity"),
+    help="Replay source label for Stage-2 base collection.",
+)
+parser.add_argument(
+    "--rl_collect_save_raw",
+    action="store_true",
+    help="Also save a small raw/debug sidecar next to the fast replay .npz.",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -170,6 +223,7 @@ from human_plan.ego_bench_eval.utils import (
     ik_step,
     ik_eval_single_step,
     get_language_instruction,
+    sanitize_task_success,
     update_eval_success,
 )
 import gymnasium as gym
@@ -190,6 +244,27 @@ from humanoid.tasks.base_env import BaseEnv, BaseEnvCfg
 
 import cv2
 from human_plan.vila_eval.utils.load_model import load_model_eval
+from rl_posttrain.action_utils import (
+    ActionSpec,
+    array_stats,
+    format_action_spec,
+    format_stats,
+    make_exec_action_dict,
+    max_abs_action_diff,
+    mean_abs_action_diff,
+    pack_action,
+    shape_summary,
+    unpack_action,
+)
+from rl_posttrain.normalizer import AffineNormalizer
+from rl_posttrain.feature_hooks import register_traj_decoder_input_hook
+from rl_posttrain.obs_utils import (
+    build_actor_obs,
+    build_critic_obs,
+    subtask_success_metrics,
+)
+from rl_posttrain.replay_buffer import ReplayBufferWriter
+from rl_posttrain.td3bc_ref import load_actor_policy
 
 
 def _get_action_dim(env: BaseEnv) -> int:
@@ -570,6 +645,33 @@ def _format_action_shape(action_dict):
         and hasattr(value, "shape")
     }
 
+
+def _record_trace_line(trace_lines, line: str) -> None:
+    print(line, flush=True)
+    trace_lines.append(line)
+
+
+def _finalize_replay_transition(replay_writer, pending, next_actor_obs, next_critic_obs, next_bc_target_raw):
+    transition = {
+        "actor_obs": pending["actor_obs"],
+        "critic_obs": pending["critic_obs"],
+        "action_raw": pending["action_raw"],
+        "bc_target_raw": pending["bc_target_raw"],
+        "reward": np.asarray([pending["reward"]], dtype=np.float32),
+        "done": np.asarray([pending["done"]], dtype=np.float32),
+        "next_actor_obs": next_actor_obs,
+        "next_critic_obs": next_critic_obs,
+        "next_bc_target_raw": next_bc_target_raw,
+        "source": pending["source"],
+        "success": np.asarray([pending["success"]], dtype=np.float32),
+        "timeout": np.asarray([pending["timeout"]], dtype=np.float32),
+    }
+    for optional in ("episode_id", "episode_step", "episode_length", "episode_success", "episode_timeout"):
+      if optional in pending:
+        transition[optional] = np.asarray([pending[optional]], dtype=np.float32)
+    raw = pending.get("raw")
+    replay_writer.add(transition, raw=raw)
+
 def main():
 
     model_args, data_args, training_args, task_args = parser.parse_args_into_dataclasses()
@@ -578,6 +680,17 @@ def main():
     image_delay_steps = int(task_args.image_delay_steps or 0)
     proprio_ablation_mode = task_args.proprio_ablation_mode
     proprio_delay_steps = int(task_args.proprio_delay_steps or 0)
+    rl_mode = task_args.rl_mode
+    rl_actor_checkpoint = task_args.rl_actor_checkpoint
+    rl_actor_enabled = rl_mode == "actor"
+    rl_action_trace = bool(task_args.rl_action_trace)
+    rl_action_trace_steps = max(0, int(task_args.rl_action_trace_steps or 0))
+    rl_identity_tolerance = float(task_args.rl_identity_tolerance)
+    rl_collect_replay_path = task_args.rl_collect_replay_path
+    rl_collect_enabled = rl_collect_replay_path is not None and str(rl_collect_replay_path).strip() != ""
+    rl_collect_source = task_args.rl_collect_source
+    rl_collect_save_raw = bool(task_args.rl_collect_save_raw)
+    rl_insert_enabled = rl_mode != "off" or rl_action_trace or rl_collect_enabled
     image_update_active = image_update_interval <= 0 or image_update_interval > 1
     if image_update_active and image_delay_steps > 0:
       raise ValueError(
@@ -590,11 +703,42 @@ def main():
       raise ValueError("proprio_delay_steps must be >= 0.")
     if proprio_ablation_mode == "delay" and proprio_delay_steps <= 0:
       raise ValueError("proprio_ablation_mode='delay' requires proprio_delay_steps > 0.")
+    if rl_identity_tolerance < 0:
+      raise ValueError("rl_identity_tolerance must be >= 0.")
+    if rl_collect_enabled and rl_collect_source not in ("base", "identity"):
+      raise ValueError("rl_collect_source must be 'base' or 'identity'.")
+    if rl_actor_enabled and (rl_actor_checkpoint is None or str(rl_actor_checkpoint).strip() == ""):
+      raise ValueError("--rl_actor_checkpoint is required when --rl_mode=actor.")
+    if rl_actor_enabled and rl_collect_enabled:
+      raise ValueError(
+        "Stage-2 base replay collection only supports rl_mode=off/identity. "
+        "Refusing to mix actor-generated data into the base replay."
+      )
 
     model, tokenizer, model_args, data_args, training_args = load_model_eval(
       model_args, data_args, training_args
     )
     model.to("cuda")
+    model.eval()
+    rl_actor_bundle = None
+    rl_actor = None
+    rl_actor_obs_normalizer = None
+    if rl_actor_enabled:
+      rl_actor_bundle = load_actor_policy(rl_actor_checkpoint, device="cuda")
+      rl_actor = rl_actor_bundle["actor"]
+      rl_actor_obs_normalizer = rl_actor_bundle["actor_obs_normalizer"]
+      print(
+        "[rl-actor] "
+        f"loaded_checkpoint={rl_actor_checkpoint} "
+        f"actor_obs_dim={rl_actor_bundle['checkpoint']['actor_obs_dim']} "
+        f"action_dim={rl_actor_bundle['checkpoint']['action_dim']}"
+      )
+    if rl_collect_enabled or rl_actor_enabled:
+      for param in model.parameters():
+        param.requires_grad = False
+      rl_feature_capture, rl_feature_handle = register_traj_decoder_input_hook(model)
+    else:
+      rl_feature_capture, rl_feature_handle = None, None
 
     data_args.sep_query_token = model_args.sep_query_token
 
@@ -707,6 +851,9 @@ def main():
       f"image_delay_steps={image_delay_steps} "
       f"proprio_ablation_mode={proprio_ablation_mode} "
       f"proprio_delay_steps={proprio_delay_steps} "
+      f"rl_mode={rl_mode} "
+      f"rl_action_trace={rl_action_trace} "
+      f"rl_collect_enabled={rl_collect_enabled} "
       f"vision_input_mode={task_args.vision_input_mode}"
     )
     print(
@@ -722,12 +869,47 @@ def main():
         "[eval-ablation:chunk] current eval is already single-step/receding-horizon execution; "
         "chunk_exec_len is recorded as a no-op instead of changing rollout semantics."
       )
+    if rl_insert_enabled:
+      print(
+        "[rl-posttrain] insertion point: after temporal smoothing and before ik_step; "
+        "identity sets a_exec = a_ref; actor mode uses normalized TD3+BC output."
+      )
+    if rl_collect_enabled:
+      print(
+        "[rl-collect] "
+        f"path={rl_collect_replay_path} source={rl_collect_source} "
+        "bc_target=canonical_action_norm_from_a_ref_raw "
+        "action_normalizer=fit_minmax_on_collected_bc_target_raw "
+        "reward=sparse_final_success"
+      )
+
+    replay_writer = None
+    rl_optional_warned = set()
+    if rl_collect_enabled:
+      replay_writer = ReplayBufferWriter(
+        rl_collect_replay_path,
+        metadata={
+          "task": task_args.task,
+          "room_idx": room_idx,
+          "table_idx": table_idx,
+          "source": rl_collect_source,
+          "actor_insert_point": "after_temporal_smoothing",
+          "bc_target": "canonical_action_norm_from_a_ref_raw",
+          "action_normalizer_mode": "fit_minmax_on_collected_bc_target_raw",
+          "reward": "sparse_final_success",
+        },
+        save_raw=rl_collect_save_raw,
+      )
+
+    rl_episode_counter = 0
 
     # with torch.inference_mode():
     for episode_idx in episode_list:
       for trial_idx in range(task_args.num_trials):
         # seq_name = f"episode_{episode_idx}.hdf5"
         seq_name = episode_idx[0]
+        rl_episode_counter += 1
+        rl_episode_id = rl_episode_counter
 
         # 30 Hz
         rgb_obs_hist = deque(maxlen=120)
@@ -754,6 +936,22 @@ def main():
         logged_proprio_shape = False
         action_chunk_horizon = None
         action_exec_len = 1
+        rl_action_spec = None
+        rl_action_normalizer = None
+        rl_actor_action_dim = 0
+        rl_identity_max_abs_diff = 0.0
+        rl_identity_mean_abs_diff_sum = 0.0
+        rl_identity_diff_count = 0
+        rl_trace_count = 0
+        rl_trace_lines = []
+        rl_pending_transition = None
+        rl_logged_obs_shapes = False
+        rl_logged_actor_obs_shapes = False
+        rl_actor_ref_mean_abs_sum = 0.0
+        rl_actor_ref_max_abs = 0.0
+        rl_actor_stat_count = 0
+        rl_actor_num_clipped_dims = 0
+        rl_ref_num_clipped_dims = 0
 
         seq_save_path = os.path.join(
           save_path,
@@ -775,13 +973,15 @@ def main():
           )
           frames_output_path = _make_non_overwriting_path(frames_output_path)
           Path(frames_output_path).mkdir(exist_ok=True, parents=True)
-        fps = 15
-        out = cv2.VideoWriter(
-          output_path, 
-          #  seq_save_path,
-          cv2.VideoWriter_fourcc(*"mp4v"), 
-          fps, (1280, 720)
-        )
+        out = None
+        if task_args.save_video:
+          fps = 15
+          out = cv2.VideoWriter(
+            output_path,
+            #  seq_save_path,
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps, (1280, 720)
+          )
 
         # def init_env():
         if True:
@@ -789,6 +989,7 @@ def main():
           curr_random_idx += 1
           base_env.cfg.randomize_idx = randomize_idxes[curr_random_idx]
           env_results = env.reset()
+          env_results = sanitize_task_success(task_args.task, base_env, env_results)
           left_ik_controller.reset()
           right_ik_controller.reset()
           padding_idx = padding
@@ -825,6 +1026,7 @@ def main():
             env_results = env.step(action)
             rgb_obs = env_results[0]["fixed_rgb"][0].cpu().numpy()[:, :, :]
             rgb_obs = cv2.resize(rgb_obs, (384, 384))
+        env_results = sanitize_task_success(task_args.task, base_env, env_results)
         initial_rgb_obs = rgb_obs.copy()
         initial_model_rgb_obs = _get_model_rgb_obs(
           rgb_obs, task_args.vision_input_mode, initial_rgb_obs, vision_rng
@@ -845,6 +1047,7 @@ def main():
         for i in tqdm.tqdm(range(max_horizon)):
           # run everything in inference mode
           # obtain quantities from simulation
+          env_results = sanitize_task_success(task_args.task, base_env, env_results)
           _assert_proprio_env_keys(env_results[0])
           rgb_obs = env_results[0]["fixed_rgb"][0].cpu().numpy()[:, :, :]
 
@@ -948,6 +1151,244 @@ def main():
             hist_len, task_args.hand_smooth_weight, action_hist_right_hand
           )
 
+          trace_this_step = rl_action_trace and rl_trace_count < rl_action_trace_steps
+          a_ref_dict = make_exec_action_dict(
+            action_left_ee,
+            action_right_ee,
+            action_left_hand,
+            action_right_hand,
+          )
+          if rl_insert_enabled:
+            if rl_action_spec is None:
+              rl_action_spec = ActionSpec.from_action_dict(a_ref_dict)
+              if rl_actor_enabled:
+                rl_action_normalizer = rl_actor_bundle["action_normalizer"]
+                normalizer_dim = int(rl_action_normalizer.mean.shape[0])
+                if normalizer_dim != rl_action_spec.dim:
+                  raise ValueError(
+                    f"Actor checkpoint action_dim={normalizer_dim} does not match "
+                    f"post-smoothing a_ref dim={rl_action_spec.dim}. "
+                    "Refusing to guess an action interface."
+                  )
+              else:
+                rl_action_normalizer = AffineNormalizer.identity(rl_action_spec.dim)
+              rl_actor_action_dim = rl_action_spec.dim
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-posttrain] "
+                f"actor_insert_point=after_temporal_smoothing "
+                f"actor_action_dim={rl_actor_action_dim} "
+                f"pack_slices={format_action_spec(rl_action_spec)}",
+              )
+
+            a_ref = pack_action(a_ref_dict, rl_action_spec)
+            a_ref_norm_unclipped = rl_action_normalizer.normalize(a_ref, clip=None)
+            ref_clipped_dims_this_step = int(np.sum(np.abs(a_ref_norm_unclipped) > 1.0))
+            rl_ref_num_clipped_dims += ref_clipped_dims_this_step
+            if rl_actor_enabled:
+              a_ref_norm = np.clip(a_ref_norm_unclipped, -1.0, 1.0).astype(np.float32, copy=False)
+            else:
+              a_ref_norm = a_ref_norm_unclipped
+
+            identity_roundtrip = rl_action_normalizer.denormalize(a_ref_norm_unclipped)
+            identity_roundtrip_dict = unpack_action(identity_roundtrip, rl_action_spec)
+            identity_diff = max_abs_action_diff(a_ref_dict, identity_roundtrip_dict, rl_action_spec)
+            identity_mean_diff = mean_abs_action_diff(a_ref_dict, identity_roundtrip_dict, rl_action_spec)
+            rl_identity_max_abs_diff = max(rl_identity_max_abs_diff, identity_diff)
+            rl_identity_mean_abs_diff_sum += identity_mean_diff
+            rl_identity_diff_count += 1
+            if rl_mode == "identity" and identity_diff > rl_identity_tolerance:
+              raise AssertionError(
+                f"RL identity pack/unpack diff {identity_diff:.8g} exceeds "
+                f"tolerance {rl_identity_tolerance:.8g}."
+              )
+
+            if rl_actor_enabled:
+              if rl_actor is None or rl_actor_obs_normalizer is None:
+                raise AssertionError("Actor mode expected a loaded TD3+BC actor checkpoint.")
+              h_in = rl_feature_capture.value if rl_feature_capture is not None else None
+              if h_in is None:
+                raise RuntimeError(
+                  "RL actor mode requires EgoVLA traj-decoder input latent h_in, "
+                  "but the feature hook did not capture a value this step."
+                )
+              actor_obs, actor_report = build_actor_obs(
+                h_in,
+                used_proprio_pack,
+                action_dict,
+                rl_action_spec,
+                a_ref_norm,
+              )
+              actor_obs_norm = rl_actor_obs_normalizer.normalize(actor_obs.reshape(1, -1), clip=None)
+              expected_actor_obs_dim = int(rl_actor_bundle["checkpoint"]["actor_obs_dim"])
+              if actor_obs_norm.shape != (1, expected_actor_obs_dim):
+                raise ValueError(
+                  f"Actor obs dim mismatch: built {actor_obs_norm.shape}, "
+                  f"checkpoint expects {(1, expected_actor_obs_dim)}. "
+                  "This usually means the feature hook/proprio/action summary interface changed."
+                )
+              actor_device = next(rl_actor.parameters()).device
+              with torch.inference_mode():
+                actor_input = torch.as_tensor(actor_obs_norm, dtype=torch.float32, device=actor_device)
+                a_exec_norm = rl_actor(actor_input).detach().cpu().numpy().reshape(-1)
+              if a_exec_norm.shape != (rl_action_spec.dim,):
+                raise ValueError(
+                  f"Actor output shape mismatch: got {a_exec_norm.shape}, "
+                  f"expected {(rl_action_spec.dim,)}."
+                )
+              a_exec_norm = np.clip(a_exec_norm, -1.0, 1.0).astype(np.float32, copy=False)
+              actor_ref_abs = np.abs(a_exec_norm - a_ref_norm)
+              rl_actor_ref_mean_abs_sum += float(actor_ref_abs.mean())
+              rl_actor_ref_max_abs = max(rl_actor_ref_max_abs, float(actor_ref_abs.max()))
+              rl_actor_num_clipped_dims += int(np.sum(np.abs(a_exec_norm) >= 1.0 - 1.0e-6))
+              rl_actor_stat_count += 1
+              if not rl_logged_actor_obs_shapes:
+                _record_trace_line(
+                  rl_trace_lines,
+                  "[rl-actor] "
+                  f"actor_report=({actor_report.summary()}) "
+                  f"actor_obs_norm_shape={actor_obs_norm.shape}",
+                )
+                rl_logged_actor_obs_shapes = True
+            else:
+              a_exec_norm = a_ref_norm
+
+            a_exec = rl_action_normalizer.denormalize(a_exec_norm)
+            a_exec_dict = unpack_action(a_exec, rl_action_spec)
+
+            if trace_this_step:
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-action-trace] "
+                f"step={i} raw_pred shape={shape_summary(action_dict, ['raw_pred']).get('raw_pred')}",
+              )
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-action-trace] "
+                f"step={i} action_dict fields shape="
+                f"{shape_summary(action_dict, ['left_ee_pose', 'right_ee_pose', 'left_qpos_multi_step', 'right_qpos_multi_step'])}",
+              )
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-action-trace] "
+                f"step={i} smooth_action fields shape={shape_summary(a_ref_dict)}",
+              )
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-action-trace] "
+                f"step={i} pack_action(a_ref) shape={a_ref.shape} "
+                f"a_ref_norm {format_stats(array_stats(a_ref_norm))} "
+                f"a_ref_norm_unclipped {format_stats(array_stats(a_ref_norm_unclipped))} "
+                f"ref_clipped_dims={ref_clipped_dims_this_step}",
+              )
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-action-trace] "
+                f"step={i} actor_action_dim={rl_actor_action_dim} "
+                f"pack/unpack slices={format_action_spec(rl_action_spec)}",
+              )
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-action-trace] "
+                f"step={i} unpack_action(a_exec) fields shape={shape_summary(a_exec_dict)} "
+                f"identity_max_abs_diff={identity_diff:.8g} "
+                f"identity_mean_abs_diff={identity_mean_diff:.8g}",
+              )
+              if rl_actor_enabled:
+                actor_ref_abs = np.abs(a_exec_norm - a_ref_norm)
+                _record_trace_line(
+                  rl_trace_lines,
+                  "[rl-actor-trace] "
+                  f"step={i} a_exec_norm {format_stats(array_stats(a_exec_norm))} "
+                  f"mean_abs_actor_minus_ref_norm={float(actor_ref_abs.mean()):.6f} "
+                  f"max_abs_actor_minus_ref_norm={float(actor_ref_abs.max()):.6f} "
+                  f"num_clipped_dims={int(np.sum(np.abs(a_exec_norm) >= 1.0 - 1.0e-6))}",
+                )
+
+            if rl_mode in ("identity", "actor") or rl_action_trace:
+              action_left_ee = a_exec_dict["left_ee_pose"]
+              action_right_ee = a_exec_dict["right_ee_pose"]
+              action_left_hand = a_exec_dict["left_qpos"]
+              action_right_hand = a_exec_dict["right_qpos"]
+
+          if rl_collect_enabled:
+            if rl_action_spec is None or rl_action_normalizer is None:
+              raise AssertionError("Replay collection expected initialized RL action spec and normalizer.")
+            h_in = rl_feature_capture.value if rl_feature_capture is not None else None
+            if h_in is None:
+              raise RuntimeError(
+                "Replay collection requires EgoVLA traj-decoder input latent h_in, "
+                "but the feature hook did not capture a value this step."
+              )
+            actor_obs, actor_report = build_actor_obs(
+              h_in,
+              used_proprio_pack,
+              action_dict,
+              rl_action_spec,
+              a_ref_norm,
+            )
+            critic_obs, critic_report, newly_missing = build_critic_obs(
+              env_results[0],
+              actor_obs,
+              optional_warned=rl_optional_warned,
+            )
+            if newly_missing:
+              rl_optional_warned.update(newly_missing)
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-collect] optional critic_obs fields missing in current task/env: "
+                f"{newly_missing}"
+              )
+            if not rl_logged_obs_shapes:
+              _record_trace_line(
+                rl_trace_lines,
+                "[rl-collect] "
+                f"actor_report=({actor_report.summary()}) "
+                f"critic_report=({critic_report.summary()})"
+              )
+              rl_logged_obs_shapes = True
+
+            if rl_pending_transition is not None:
+              _finalize_replay_transition(
+                replay_writer,
+                rl_pending_transition,
+                actor_obs,
+                critic_obs,
+                a_ref,
+              )
+              rl_pending_transition = None
+
+            rl_pending_transition = {
+              "actor_obs": actor_obs,
+              "critic_obs": critic_obs,
+              "action_raw": a_exec,
+              "bc_target_raw": a_ref,
+              "source": rl_collect_source,
+              "reward": 0.0,
+              "done": 0.0,
+              "success": 0.0,
+              "timeout": 0.0,
+              "episode_id": rl_episode_id,
+              "episode_step": i + 1,
+              "episode_length": 0.0,
+              "episode_success": 0.0,
+              "episode_timeout": 0.0,
+              "raw": {
+                "episode_id": rl_episode_id,
+                "episode_label": episode_idx[0],
+                "trial_idx": trial_idx,
+                "step": i,
+                "h_in_shape": actor_report.h_in_shape,
+                "proprio_shapes": actor_report.proprio_shapes,
+                "critic_shapes": critic_report.critic_shapes,
+                "a_ref": a_ref.copy(),
+                "a_ref_norm_temporary": a_ref_norm.copy(),
+                "a_exec": a_exec.copy(),
+                "a_exec_norm_temporary": a_exec_norm.copy(),
+                "subtask_success": subtask_success_metrics(env_results[0]),
+              },
+            }
+
           ik_step(
               env,
               left_ik_controller,
@@ -967,6 +1408,14 @@ def main():
 
               action
           )
+          if trace_this_step:
+            _record_trace_line(
+              rl_trace_lines,
+              "[rl-action-trace] "
+              f"step={i} env.step final action shape={tuple(action.shape)} "
+              f"action_device={action.device} action_dtype={action.dtype}",
+            )
+            rl_trace_count += 1
           env_results = env.step(action)
           current_action_for_stats = action.detach().clone()
           action_norm_sum += current_action_for_stats.norm(dim=-1).mean().item()
@@ -980,11 +1429,31 @@ def main():
           success_reached, success_streak = update_eval_success(
             task_args.task, base_env, env_results, success_streak
           )
-
-          # Success
-          if success_reached:
-            result = True
-            break
+          timeout_reached = (i == max_horizon - 1) and not success_reached
+          if rl_collect_enabled and rl_pending_transition is not None:
+            rl_pending_transition["success"] = 1.0 if success_reached else 0.0
+            rl_pending_transition["timeout"] = 1.0 if timeout_reached else 0.0
+            rl_pending_transition["done"] = 1.0 if (success_reached or timeout_reached) else 0.0
+            rl_pending_transition["reward"] = 1.0 if success_reached else 0.0
+            rl_pending_transition["episode_success"] = 1.0 if success_reached else 0.0
+            rl_pending_transition["episode_timeout"] = 1.0 if timeout_reached else 0.0
+            rl_pending_transition["raw"]["post_step_subtask_success"] = subtask_success_metrics(env_results[0])
+            if success_reached or timeout_reached:
+              rl_pending_transition["episode_length"] = action_stat_count
+              _finalize_replay_transition(
+                replay_writer,
+                rl_pending_transition,
+                rl_pending_transition["actor_obs"],
+                rl_pending_transition["critic_obs"],
+                rl_pending_transition["bc_target_raw"],
+              )
+              replay_writer.set_episode_result(
+                rl_episode_id,
+                action_stat_count,
+                1.0 if success_reached else 0.0,
+                1.0 if timeout_reached else 0.0,
+              )
+              rl_pending_transition = None
 
           result_img_3d = env_results[0]["fixed_rgb"][0].cpu().numpy()[:, :, ::-1].copy()
           if task_args.project_trajs == 1:
@@ -1013,7 +1482,8 @@ def main():
                     (0, 255, 0), thickness=2
                   )  
 
-          out.write(result_img_3d)
+          if out is not None:
+            out.write(result_img_3d)
 
           if task_args.save_frames:
             cv2.imwrite(
@@ -1022,10 +1492,18 @@ def main():
             )
           count += 1
 
+          # Record the current frame before breaking so first-step successes do
+          # not leave behind empty mp4 containers with no video stream.
+          if success_reached:
+            result = True
+            break
+
         with open(task_args.result_saving_path, "a") as f:
           f.write(f"Task: {task_name}, Room Idx: {room_idx}, Table Idx: {table_idx}, Episode Label: {episode_idx[0]}, Trial Label: {trial_idx}, Result: {result} \n")
           avg_action_norm = action_norm_sum / max(action_stat_count, 1)
           avg_action_delta_norm = action_delta_norm_sum / max(action_stat_count - 1, 1)
+          avg_actor_ref_abs = rl_actor_ref_mean_abs_sum / max(rl_actor_stat_count, 1)
+          avg_identity_mean_abs_diff = rl_identity_mean_abs_diff_sum / max(rl_identity_diff_count, 1)
           f.write(
             "eval_ablation: "
             f"chunk_exec_len={chunk_exec_len} "
@@ -1041,9 +1519,21 @@ def main():
             f"episode_length={action_stat_count} "
             f"action_norm_mean={avg_action_norm:.6f} "
             f"action_delta_norm_mean={avg_action_delta_norm:.6f} "
+            f"rl_mode={rl_mode} "
+            f"rl_actor_action_dim={rl_actor_action_dim} "
+            f"rl_identity_max_abs_diff={rl_identity_max_abs_diff:.8g} "
+            f"rl_identity_mean_abs_diff={avg_identity_mean_abs_diff:.8g} "
+            f"rl_actor_mean_abs_actor_minus_ref_norm={avg_actor_ref_abs:.6f} "
+            f"rl_actor_max_abs_actor_minus_ref_norm={rl_actor_ref_max_abs:.6f} "
+            f"rl_actor_num_clipped_dims={rl_actor_num_clipped_dims} "
+            f"rl_ref_num_clipped_dims={rl_ref_num_clipped_dims} "
             f"image_mean_abs_diff={image_ablation.mean_abs_diff():.6f} "
             f"proprio_mean_abs_diff={proprio_ablation.mean_abs_diff():.6f}\n"
           )
+          if rl_trace_lines:
+            f.write("rl_action_trace:\n")
+            for line in rl_trace_lines:
+              f.write(f"{line}\n")
           subtask_string = ""
           for key in env_results[0].keys():
             if "success" in key:
@@ -1051,9 +1541,64 @@ def main():
           subtask_string += "\n"
           f.write(subtask_string)
           
-        out.release()
-        _convert_video_to_h264(output_path)
+        if out is not None:
+          out.release()
+          _convert_video_to_h264(output_path)
         # close the simulator
+    if replay_writer is not None:
+      replay_path = replay_writer.save()
+      replay_contract_parts = []
+      with np.load(replay_path, allow_pickle=False) as replay_data:
+        action_dim = int(replay_data["action_norm"].shape[-1])
+        actor_obs_dim = int(replay_data["actor_obs"].shape[-1])
+        actor_tail_diff = float(
+          np.max(np.abs(replay_data["actor_obs"][:, -action_dim:] - replay_data["bc_target_norm"]))
+        )
+        critic_prefix_diff = float(
+          np.max(np.abs(replay_data["critic_obs"][:, :actor_obs_dim] - replay_data["actor_obs"]))
+        )
+        replay_contract_parts.extend(
+          [
+            f"action_norm_range=[{float(replay_data['action_norm'].min()):.6f},{float(replay_data['action_norm'].max()):.6f}]",
+            f"bc_target_norm_range=[{float(replay_data['bc_target_norm'].min()):.6f},{float(replay_data['bc_target_norm'].max()):.6f}]",
+            f"next_bc_target_norm_range=[{float(replay_data['next_bc_target_norm'].min()):.6f},{float(replay_data['next_bc_target_norm'].max()):.6f}]",
+            f"actor_tail_diff={actor_tail_diff:.8g}",
+            f"critic_prefix_diff={critic_prefix_diff:.8g}",
+            "action_normalizer_present="
+            + str(
+              all(
+                key in replay_data.files
+                for key in ("action_normalizer_mean", "action_normalizer_scale", "action_normalizer_eps")
+              )
+            ),
+          ]
+        )
+        if "episode_length" in replay_data.files:
+          episode_lengths = np.asarray(replay_data["episode_length"]).reshape(-1)
+          terminal_mask = np.asarray(replay_data["done"]).reshape(-1) > 0.5
+          terminal_lengths = episode_lengths[terminal_mask]
+          if terminal_lengths.size > 0:
+            replay_contract_parts.append(
+              "episode_length_terminal_range="
+              f"[{float(terminal_lengths.min()):.0f},{float(terminal_lengths.max()):.0f}]"
+            )
+          replay_contract_parts.append(
+            f"episode_length_recorded={str(bool(episode_lengths.size))}"
+          )
+        if "metadata_json" in replay_data.files:
+          replay_metadata = json.loads(str(replay_data["metadata_json"].item()))
+          replay_contract_parts.append(
+            "format=" + str(replay_metadata.get("format", "unknown"))
+          )
+      replay_message = (
+        f"[rl-collect] saved_replay={replay_path} transitions={len(replay_writer)} "
+        + " ".join(replay_contract_parts)
+      )
+      print(replay_message)
+      with open(task_args.result_saving_path, "a") as f:
+        f.write(replay_message + "\n")
+    if rl_feature_handle is not None:
+      rl_feature_handle.remove()
     env.close()
 
 if __name__ == "__main__":
