@@ -108,6 +108,10 @@ parser.add_argument("--smooth_weight", type=float, default=None, help="smooth we
 parser.add_argument("--hand_smooth_weight", type=float, default=None, help="smooth weight")
 parser.add_argument("--num_episodes", type=int, default=None, help="episode_label")
 parser.add_argument("--num_trials", type=int, default=None, help="trial label")
+parser.add_argument("--episode_start_idx", type=int, default=0, help="start index into TASK_INIT_EPISODE")
+parser.add_argument("--trial_start_idx", type=int, default=0, help="first trial label to execute")
+parser.add_argument("--randomize_total_episodes", type=int, default=None, help="total episode count used for stable randomize_idx slicing")
+parser.add_argument("--randomize_total_trials", type=int, default=None, help="total trial count used for stable randomize_idx slicing")
 parser.add_argument("--result_saving_path", type=str, default=None, help="result saving path")
 parser.add_argument("--video_saving_path", type=str, default=None, help="video saving path")
 parser.add_argument("--save_video", type=int, default=1, help="save episode mp4 video")
@@ -757,9 +761,16 @@ def main():
     elif set_selection == "Test":
       # We used the first 100 random idxes for training
       # Starting from 101th random ides for evaluation
+      randomize_total_episodes = task_args.randomize_total_episodes or task_args.num_episodes
+      randomize_total_trials = task_args.randomize_total_trials or task_args.num_trials
+      randomize_slice_offset = (
+        int(task_args.episode_start_idx) * int(randomize_total_trials)
+        + int(task_args.trial_start_idx)
+      )
       curr_random_idx = 100 + (
         task_args.room_idx * 5 + task_args.table_idx
-      )  * task_args.num_trials * task_args.num_episodes
+      )  * int(randomize_total_trials) * int(randomize_total_episodes)
+      curr_random_idx += randomize_slice_offset
 
     # parse configuration
     env_cfg: BaseEnvCfg = parse_env_cfg(
@@ -831,7 +842,9 @@ def main():
 
     # Collect Initial Hand and EE poses from data -> Only set the arm and hand for start
     from human_plan.ego_bench_eval.utils import TASK_INIT_EPISODE
-    episode_list = TASK_INIT_EPISODE[task_name][:task_args.num_episodes]
+    episode_start_idx = int(task_args.episode_start_idx)
+    episode_end_idx = episode_start_idx + int(task_args.num_episodes)
+    episode_list = TASK_INIT_EPISODE[task_name][episode_start_idx:episode_end_idx]
 
     hist_len = data_args.predict_future_step * data_args.future_index
 
@@ -905,7 +918,7 @@ def main():
 
     # with torch.inference_mode():
     for episode_idx in episode_list:
-      for trial_idx in range(task_args.num_trials):
+      for trial_idx in range(int(task_args.trial_start_idx), int(task_args.trial_start_idx) + int(task_args.num_trials)):
         # seq_name = f"episode_{episode_idx}.hdf5"
         seq_name = episode_idx[0]
         rl_episode_counter += 1

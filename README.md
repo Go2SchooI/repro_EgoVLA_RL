@@ -257,7 +257,19 @@ SAVE_VIDEO=0 SAVE_FRAMES=0 PROJECT_TRAJS=0 \
 ./run_local_eval.sh
 ```
 
-The `rl_posttrain.collect_base` wrapper disables mp4 recording by default. Add `--save_video` only when you intentionally want collection videos.
+The `rl_posttrain.collect_base` wrapper disables mp4 recording by default. Add `--save_video` only when you intentionally want collection videos. When `--output` is a directory, collection is cached as one `.npz` shard per episode/trial and an `episodes.json` summary, so interrupted runs can be resumed by re-running the same command.
+
+```bash
+conda activate env_isaaclab
+python -m rl_posttrain.collect_base \
+  --output playground_eval/replays/open_laptop_room1_table1_base \
+  --task Humanoid-Open-Laptop-v0 \
+  --room_idx 1 \
+  --table_idx 1 \
+  --source base \
+  --num_episodes 10 \
+  --num_trials 2
+```
 
 Stage 3 pure BC training:
 
@@ -268,6 +280,8 @@ python -m rl_posttrain.td3bc_ref \
   --output playground_eval/rl_checkpoints/pure_bc.pt \
   --td3bc_alpha 0.0 --td3bc_bc_weight 1.0
 ```
+
+`--replay` may point to one replay `.npz` or to a replay directory; directories are loaded recursively and canonical action normalization is re-fit from all `bc_target_raw` fields before training.
 
 Stage 4 actor eval and paired eval:
 
@@ -283,7 +297,26 @@ python -m rl_posttrain.paired_eval \
   --actor_checkpoint playground_eval/rl_checkpoints/pure_bc.pt
 ```
 
-`paired_eval` records mp4 videos by default under each mode's `videos/` directory; pass `--no_save_video` to disable that.
+`paired_eval` records mp4 videos by default under each mode's `videos/` directory; pass `--no_save_video` to disable that. It can compare multiple actor checkpoints against one shared baseline run. Use repeated `--scene ROOM TABLE` to evaluate several room/table pairs into one top-level folder with an aggregate `paired_summary.json`:
+
+```bash
+conda activate env_isaaclab
+python -m rl_posttrain.paired_eval \
+  --actor_checkpoint \
+    playground_eval/rl_checkpoints/pure_bc.pt \
+    playground_eval/rl_checkpoints/td3bc_alpha003.pt \
+  --task Humanoid-Open-Laptop-v0 \
+  --model_path checkpoints/ego_vla_checkpoint/checkpoint-3000 \
+  --scene 1 1 \
+  --scene 1 2 \
+  --scene 2 1 \
+  --scene 2 2 \
+  --num_episodes 5 \
+  --num_trials 3 \
+  --skip_identity
+```
+
+For Open-Laptop only, the final success threshold is fixed at `0.6 * laptop_upper_joint_limit`.
 
 Stage 5 weak-Q TD3+BC should be tried only after pure BC paired eval is safe:
 

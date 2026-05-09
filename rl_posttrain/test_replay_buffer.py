@@ -68,12 +68,12 @@ def test_load_directory_merges_replays_with_global_action_normalizer(tmp_path):
     replay_dir = tmp_path / "replays"
     replay_dir.mkdir()
 
-    writer_a = ReplayBufferWriter(replay_dir / "a.npz", metadata={"room_idx": 1})
+    writer_a = ReplayBufferWriter(replay_dir / "room1" / "a.npz", metadata={"room_idx": 1})
     writer_a.add(_transition("base", action=[0.0, 0.0, 0.0], next_action=[2.0, 2.0, 2.0]))
     writer_a.add(_transition("base", action=[2.0, 2.0, 2.0], next_action=[0.0, 0.0, 0.0]))
     writer_a.save()
 
-    writer_b = ReplayBufferWriter(replay_dir / "b.npz", metadata={"room_idx": 2})
+    writer_b = ReplayBufferWriter(replay_dir / "room2" / "b.npz", metadata={"room_idx": 2})
     writer_b.add(_transition("base", action=[10.0, 10.0, 10.0], next_action=[12.0, 12.0, 12.0]))
     writer_b.add(_transition("base", action=[12.0, 12.0, 12.0], next_action=[10.0, 10.0, 10.0]))
     writer_b.save()

@@ -275,7 +275,7 @@ class OfflineReplayBuffer:
     def load(cls, path: str | Path, replay_filter: str = "all") -> "OfflineReplayBuffer":
         path = Path(path)
         if path.is_dir():
-            paths = sorted(item for item in path.glob("*.npz") if item.is_file())
+            paths = sorted(item for item in path.rglob("*.npz") if item.is_file())
             return cls.load_many(paths, replay_filter=replay_filter)
 
         data = np.load(path, allow_pickle=False)

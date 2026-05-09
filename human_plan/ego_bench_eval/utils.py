@@ -44,13 +44,15 @@ TASK_MAX_HORIZON = {
   "Humanoid-Orient-Pour-Balls-v0": 600,
 
   "Humanoid-Stack-Can-v0": 300,
-  "Humanoid-Open-Laptop-v0": 300,
+  "Humanoid-Open-Laptop-v0": 200,
  
   "Humanoid-Stack-Can-Into-Drawer-v0": 400
 }
 
 FLIP_MUG_STRICT_Z_THRESHOLD = 0.866
 FLIP_MUG_STRICT_REQUIRED_STEPS = 3
+OPEN_LAPTOP_SUCCESS_RATIO = 0.6
+OPEN_LAPTOP_MOVE_LID_RATIO = 0.15
 
 TASK_INIT_EPISODE = {
     "Close-Drawer": [
@@ -208,8 +210,8 @@ def sanitize_task_success(task_name, base_env, env_results):
   if task_name == "Humanoid-Open-Laptop-v0" and hasattr(base_env, "laptop"):
     laptop_upper = base_env.laptop.data.joint_limits[:, 0, 1]
     laptop_joint_pos = base_env.laptop.data.joint_pos[:, 0]
-    success = laptop_joint_pos > laptop_upper * 0.7
-    move_lid_success = laptop_joint_pos > laptop_upper * 0.15
+    success = laptop_joint_pos > laptop_upper * OPEN_LAPTOP_SUCCESS_RATIO
+    move_lid_success = laptop_joint_pos > laptop_upper * OPEN_LAPTOP_MOVE_LID_RATIO
     success = success.to(device=base_env.device, dtype=torch.float32)
     move_lid_success = move_lid_success.to(device=base_env.device, dtype=torch.float32)
     env_results[0]["success"] = success

@@ -15,6 +15,10 @@ ROOM_IDX="${ROOM_IDX:-1}"
 TABLE_IDX="${TABLE_IDX:-1}"
 NUM_EPISODES="${NUM_EPISODES:-1}"
 NUM_TRIALS="${NUM_TRIALS:-1}"
+EPISODE_START_IDX="${EPISODE_START_IDX:-0}"
+TRIAL_START_IDX="${TRIAL_START_IDX:-0}"
+RANDOMIZE_TOTAL_EPISODES="${RANDOMIZE_TOTAL_EPISODES:-$NUM_EPISODES}"
+RANDOMIZE_TOTAL_TRIALS="${RANDOMIZE_TOTAL_TRIALS:-$NUM_TRIALS}"
 SMOOTH_WEIGHT="${SMOOTH_WEIGHT:-0.2}"
 HAND_SMOOTH_WEIGHT="${HAND_SMOOTH_WEIGHT:-0.8}"
 SAVE_VIDEO="${SAVE_VIDEO:-1}"
@@ -95,7 +99,10 @@ echo "RL action trace steps: $RL_ACTION_TRACE_STEPS"
 echo "RL actor checkpoint: $RL_ACTOR_CHECKPOINT"
 echo "RL collect replay path: $RL_COLLECT_REPLAY_PATH"
 echo "RL collect source: $RL_COLLECT_SOURCE"
-
+echo "Episode start idx: $EPISODE_START_IDX"
+echo "Trial start idx: $TRIAL_START_IDX"
+echo "Randomize total episodes: $RANDOMIZE_TOTAL_EPISODES"
+echo "Randomize total trials: $RANDOMIZE_TOTAL_TRIALS"
 if [[ "${TERM:-dumb}" == "dumb" ]]; then
   export TERM=xterm
 fi
@@ -181,6 +188,10 @@ export PYTHONPATH="$VENDOR_PY:$REPO_ROOT:$REPO_ROOT/VILA:$REPO_ROOT/manopth${PYT
   --smooth_weight "$SMOOTH_WEIGHT" \
   --num_episodes "$NUM_EPISODES" \
   --num_trials "$NUM_TRIALS" \
+  --episode_start_idx "$EPISODE_START_IDX" \
+  --trial_start_idx "$TRIAL_START_IDX" \
+  --randomize_total_episodes "$RANDOMIZE_TOTAL_EPISODES" \
+  --randomize_total_trials "$RANDOMIZE_TOTAL_TRIALS" \
   --result_saving_path "$RESULT_PATH" \
   --save_video "$SAVE_VIDEO" \
   --save_frames "$SAVE_FRAMES" \

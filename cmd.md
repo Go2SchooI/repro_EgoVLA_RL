@@ -75,8 +75,8 @@ TAG=open_laptop_v4_checkpoint3000_$(date +%Y%m%d_%H%M%S)
 REPLAY_DIR=playground_eval/replays/${TAG}
 mkdir -p ${REPLAY_DIR}
 
-# 按需增删 room/table 组合。每个组合会生成一个独立 npz，
-# 训练时 --replay 直接传文件夹，代码会混合文件夹内所有 .npz。
+# 按需增删 room/table 组合。每个组合会生成一个缓存子目录，
+# 里面每个 episode/trial 一个 npz；训练时 --replay 直接传总文件夹。
 ROOM_TABLES=(
   "1 1"
   "1 2"
@@ -88,10 +88,11 @@ ROOM_TABLES=(
 
 # 1. 采 Base Replay
 # collect_base 默认不保存视频；如需保存视频再额外加 --save_video
+# --output 给目录时会启用缓存：每个 episode/trial 单独保存 npz，并写 episodes.json
 for RT in "${ROOM_TABLES[@]}"; do
   read -r ROOM_IDX TABLE_IDX <<< "${RT}"
   python -m rl_posttrain.collect_base \
-    --output ${REPLAY_DIR}/room${ROOM_IDX}_table${TABLE_IDX}_base.npz \
+    --output ${REPLAY_DIR}/room${ROOM_IDX}_table${TABLE_IDX}_base \
     --task ${TASK} \
     --room_idx ${ROOM_IDX} \
     --table_idx ${TABLE_IDX} \
@@ -128,21 +129,18 @@ python -m rl_posttrain.td3bc_ref \
   --log_every 100 \
   --device cuda
 
-# 3A. Paired Eval: pure BC，对比 baseline/off 和 actor，跳过 identity
+# 3. Paired Eval: 一次对比多个 actor checkpoint，跳过 identity
 # paired_eval 默认保存视频；如不想保存视频，加 --no_save_video
+# 可以重复传 --scene，一次生成总目录和总 paired_summary.json。
 python -m rl_posttrain.paired_eval \
-  --actor_checkpoint ${PURE_BC_CKPT} \
+  --actor_checkpoint ${PURE_BC_CKPT} ${TD3BC_CKPT} \
   --task ${TASK} \
+  --model_path ${MODEL_PATH} \
+  --scene 1 1 \
+  --scene 1 2 \
+  --scene 2 1 \
+  --scene 2 2 \
   --num_episodes 5 \
   --num_trials 3 \
   --skip_identity \
-  --output_root playground_eval/paired_eval/${TAG}_pure_bc
-
-# 3B. Paired Eval: weak-Q TD3+BC alpha=0.03，对比 baseline/off 和 actor，跳过 identity
-python -m rl_posttrain.paired_eval \
-  --actor_checkpoint ${TD3BC_CKPT} \
-  --task ${TASK} \
-  --num_episodes 5 \
-  --num_trials 3 \
-  --skip_identity \
-  --output_root playground_eval/paired_eval/${TAG}_td3bc_${ALPHA_TAG}
+  --output_root playground_eval/paired_eval/${TAG}_multi_scene_multi_actor
