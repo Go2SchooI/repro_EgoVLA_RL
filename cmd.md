@@ -102,7 +102,10 @@ for RT in "${ROOM_TABLES[@]}"; do
 done
 
 # 2A. 训练 pure BC actor：td3bc_alpha=0.0
-PURE_BC_CKPT=playground_eval/rl_checkpoints/${TAG}_pure_bc.pt
+# 训练会输出一个目录，里面包含 actor.pt 和 config.yaml。
+# 如需推送 wandb，在命令末尾追加：
+#   --wandb_project egovla-td3bc --wandb_run_name ${TAG}_pure_bc --wandb_tags open_laptop,pure_bc
+PURE_BC_CKPT=playground_eval/rl_checkpoints/${TAG}_pure_bc
 python -m rl_posttrain.td3bc_ref \
   --replay ${REPLAY_DIR} \
   --output ${PURE_BC_CKPT} \
@@ -116,8 +119,11 @@ python -m rl_posttrain.td3bc_ref \
 
 # 2B. 训练 weak-Q TD3+BC actor：td3bc_alpha=0.03
 # pure BC paired eval 不明显破坏 baseline 后，再跑这个版本
+# 训练会输出一个目录，里面包含 actor.pt 和 config.yaml。
+# 如需推送 wandb，在命令末尾追加：
+#   --wandb_project egovla-td3bc --wandb_run_name ${TAG}_${ALPHA_TAG} --wandb_tags open_laptop,td3bc,${ALPHA_TAG}
 ALPHA_TAG=alpha003
-TD3BC_CKPT=playground_eval/rl_checkpoints/${TAG}_td3bc_${ALPHA_TAG}.pt
+TD3BC_CKPT=playground_eval/rl_checkpoints/${TAG}_td3bc_${ALPHA_TAG}
 python -m rl_posttrain.td3bc_ref \
   --replay ${REPLAY_DIR} \
   --output ${TD3BC_CKPT} \

@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Sequence
+from typing import Any, Dict, Sequence
 
 import numpy as np
 import torch
@@ -257,6 +258,7 @@ class TD3BCTrainer:
 
 
 def load_actor_policy(path: str | Path, device: str | torch.device = "cuda"):
+    path = resolve_actor_checkpoint_path(path)
     try:
         checkpoint = torch.load(path, map_location=device, weights_only=False)
     except TypeError:
@@ -282,10 +284,183 @@ def parse_hidden_dims(value: str) -> tuple[int, ...]:
     return tuple(int(item) for item in value.split(",") if item.strip())
 
 
+def resolve_actor_checkpoint_path(path: str | Path) -> Path:
+    path = Path(path).expanduser()
+    if path.is_dir():
+        preferred = [path / "actor.pt", path / "checkpoint.pt"]
+        for candidate in preferred:
+            if candidate.is_file():
+                return candidate
+        pt_files = sorted(path.glob("*.pt"))
+        if len(pt_files) == 1:
+            return pt_files[0]
+        if not pt_files:
+            raise FileNotFoundError(f"Actor checkpoint directory contains no .pt file: {path}")
+        raise ValueError(
+            f"Actor checkpoint directory contains multiple .pt files and no actor.pt: {path}"
+        )
+    return path
+
+
+def resolve_training_output_paths(
+    output: str | Path,
+    config_output: str | Path | None = None,
+) -> tuple[Path, Path, Path]:
+    output_path = Path(output).expanduser()
+    if output_path.suffix in (".pt", ".pth"):
+        output_dir = output_path.parent
+        checkpoint_path = output_path
+        default_config_path = output_path.with_suffix(".yaml")
+    else:
+        output_dir = output_path
+        checkpoint_path = output_dir / "actor.pt"
+        default_config_path = output_dir / "config.yaml"
+    config_path = Path(config_output).expanduser() if config_output else default_config_path
+    return output_dir, checkpoint_path, config_path
+
+
+def _yaml_safe(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return [_yaml_safe(item) for item in value]
+    if isinstance(value, list):
+        return [_yaml_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _yaml_safe(item) for key, item in value.items()}
+    if isinstance(value, np.ndarray):
+        return _yaml_safe(value.tolist())
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _format_yaml_scalar(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(str(value))
+
+
+def _write_yaml_lines(value: Any, indent: int = 0) -> list[str]:
+    prefix = " " * indent
+    value = _yaml_safe(value)
+    if isinstance(value, dict):
+        if not value:
+            return [prefix + "{}"]
+        lines: list[str] = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                lines.append(f"{prefix}{key}:")
+                lines.extend(_write_yaml_lines(item, indent + 2))
+            else:
+                lines.append(f"{prefix}{key}: {_format_yaml_scalar(item)}")
+        return lines
+    if isinstance(value, list):
+        if not value:
+            return [prefix + "[]"]
+        lines = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                lines.append(prefix + "-")
+                lines.extend(_write_yaml_lines(item, indent + 2))
+            else:
+                lines.append(f"{prefix}- {_format_yaml_scalar(item)}")
+        return lines
+    return [prefix + _format_yaml_scalar(value)]
+
+
+def write_training_yaml(path: str | Path, payload: Dict[str, Any]) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(_write_yaml_lines(payload)) + "\n"
+    path.write_text(text)
+    return path
+
+
+def build_training_config_payload(
+    args: argparse.Namespace,
+    cfg: TD3BCConfig,
+    prepared: PreparedReplay,
+    replay: OfflineReplayBuffer,
+) -> Dict[str, Any]:
+    return {
+        "format": "td3bc_ref_training_config_v1",
+        "command": " ".join(sys.argv),
+        "output": str(args.output),
+        "output_dir": str(args.output_dir),
+        "checkpoint_path": str(args.checkpoint_output),
+        "config_path": str(args.config_output),
+        "replay": str(args.replay),
+        "steps": int(args.steps),
+        "seed": int(args.seed),
+        "device": str(args.device),
+        "replay_filter": str(args.replay_filter),
+        "td3bc_config": asdict(cfg),
+        "prepared_replay": {
+            "size": prepared.size,
+            "actor_obs_dim": prepared.actor_obs_dim,
+            "critic_obs_dim": prepared.critic_obs_dim,
+            "action_dim": prepared.action_dim,
+        },
+        "replay_metadata": replay.metadata,
+        "wandb": {
+            "enabled": bool(args.wandb_project),
+            "project": args.wandb_project,
+            "entity": args.wandb_entity,
+            "run_name": args.wandb_run_name,
+            "group": args.wandb_group,
+            "tags": [tag for tag in args.wandb_tags.split(",") if tag.strip()],
+            "mode": args.wandb_mode,
+        },
+    }
+
+
+def init_wandb(args: argparse.Namespace, payload: Dict[str, Any]):
+    if not args.wandb_project:
+        return None
+    try:
+        import wandb
+    except ImportError as exc:
+        raise ImportError(
+            "wandb is not installed in this environment. Install wandb or omit --wandb_project."
+        ) from exc
+
+    tags = [tag.strip() for tag in args.wandb_tags.split(",") if tag.strip()]
+    run = wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity or None,
+        name=args.wandb_run_name or None,
+        group=args.wandb_group or None,
+        tags=tags or None,
+        mode=args.wandb_mode or None,
+        dir=args.wandb_dir or None,
+        config=_yaml_safe(payload),
+    )
+    return run
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train TD3+BC-style offline correction actor.")
     parser.add_argument("--replay", required=True, help="Replay .npz file or a directory containing replay .npz files.")
-    parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--output",
+        required=True,
+        help=(
+            "Output directory, or a legacy .pt checkpoint path. Directory mode writes "
+            "actor.pt and config.yaml inside the directory."
+        ),
+    )
+    parser.add_argument(
+        "--config_output",
+        default=None,
+        help="YAML path for training hyperparameters. Defaults to config.yaml inside output directory.",
+    )
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--device", default="cuda")
@@ -306,7 +481,18 @@ def main() -> None:
     parser.add_argument("--actor_hidden_dims", default="1024,1024,512")
     parser.add_argument("--critic_hidden_dims", default="1024,1024,512")
     parser.add_argument("--replay_filter", default="base_only", choices=("base_only", "all"))
+    parser.add_argument("--wandb_project", default=None, help="If set, log TD3+BC metrics to this wandb project.")
+    parser.add_argument("--wandb_entity", default=None)
+    parser.add_argument("--wandb_run_name", default=None)
+    parser.add_argument("--wandb_group", default=None)
+    parser.add_argument("--wandb_tags", default="", help="Comma-separated wandb tags.")
+    parser.add_argument("--wandb_mode", default=None, choices=("online", "offline", "disabled"))
+    parser.add_argument("--wandb_dir", default=None)
     args = parser.parse_args()
+    output_dir, checkpoint_path, config_path = resolve_training_output_paths(args.output, args.config_output)
+    args.output_dir = str(output_dir)
+    args.checkpoint_output = str(checkpoint_path)
+    args.config_output = str(config_path)
 
     replay = OfflineReplayBuffer.load(args.replay, replay_filter=args.replay_filter)
     cfg = TD3BCConfig(
@@ -328,12 +514,17 @@ def main() -> None:
     )
     prepared = PreparedReplay(replay, cfg)
     trainer = TD3BCTrainer(prepared, cfg, device=args.device, seed=args.seed)
+    config_payload = build_training_config_payload(args, cfg, prepared, replay)
+    config_path = write_training_yaml(config_path, config_payload)
+    wandb_run = init_wandb(args, config_payload)
     print(
         "[td3bc] "
         f"replay_size={prepared.size} actor_obs_dim={prepared.actor_obs_dim} "
         f"critic_obs_dim={prepared.critic_obs_dim} action_dim={prepared.action_dim} "
         f"alpha={cfg.td3bc_alpha} bc_weight={cfg.td3bc_bc_weight}"
     )
+    print(f"[td3bc] output_dir={output_dir}")
+    print(f"[td3bc] saved_training_config={config_path}")
     if replay.metadata.get("num_replays"):
         print(
             "[td3bc] "
@@ -347,9 +538,15 @@ def main() -> None:
         if step == 1 or step % int(args.log_every) == 0 or step == int(args.steps):
             log_text = " ".join(f"{key}={value:.6f}" for key, value in sorted(last_logs.items()))
             print(f"[td3bc] step={step} {log_text}")
+            if wandb_run is not None:
+                wandb_run.log({f"train/{key}": value for key, value in last_logs.items()}, step=step)
 
-    path = trainer.save(args.output)
+    path = trainer.save(checkpoint_path)
     print(f"[td3bc] saved_checkpoint={path}")
+    if wandb_run is not None:
+        wandb_run.summary["checkpoint_path"] = str(path)
+        wandb_run.summary["config_path"] = str(config_path)
+        wandb_run.finish()
 
 
 if __name__ == "__main__":

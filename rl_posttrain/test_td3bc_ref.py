@@ -1,9 +1,18 @@
+import argparse
 import numpy as np
 import pytest
 
 from rl_posttrain.normalizer import AffineNormalizer
 from rl_posttrain.replay_buffer import OfflineReplayBuffer
-from rl_posttrain.td3bc_ref import PreparedReplay, TD3BCConfig, TD3BCTrainer
+from rl_posttrain.td3bc_ref import (
+    PreparedReplay,
+    TD3BCConfig,
+    TD3BCTrainer,
+    build_training_config_payload,
+    resolve_actor_checkpoint_path,
+    resolve_training_output_paths,
+    write_training_yaml,
+)
 
 
 def _synthetic_replay(size=32):
@@ -58,3 +67,52 @@ def test_prepared_replay_rejects_missing_action_normalizer():
     cfg = TD3BCConfig(actor_hidden_dims=(16,), critic_hidden_dims=(16,), batch_size=8)
     with pytest.raises(ValueError, match="missing action_normalizer"):
         PreparedReplay(replay, cfg)
+
+
+def test_training_yaml_records_hyperparameters(tmp_path):
+    replay = _synthetic_replay()
+    cfg = TD3BCConfig(actor_hidden_dims=(16,), critic_hidden_dims=(16,), batch_size=8, td3bc_alpha=0.03)
+    prepared = PreparedReplay(replay, cfg)
+    args = argparse.Namespace(
+        output=str(tmp_path / "actor.pt"),
+        output_dir=str(tmp_path),
+        checkpoint_output=str(tmp_path / "actor.pt"),
+        config_output=str(tmp_path / "actor.yaml"),
+        replay="synthetic.npz",
+        steps=12,
+        seed=3,
+        device="cpu",
+        replay_filter="base_only",
+        wandb_project=None,
+        wandb_entity=None,
+        wandb_run_name=None,
+        wandb_group=None,
+        wandb_tags="",
+        wandb_mode=None,
+    )
+
+    payload = build_training_config_payload(args, cfg, prepared, replay)
+    path = write_training_yaml(tmp_path / "actor.yaml", payload)
+    text = path.read_text()
+
+    assert "td3bc_alpha: 0.03" in text
+    assert "actor_obs_dim: 6" in text
+    assert "critic_obs_dim: 9" in text
+    assert "action_dim: 3" in text
+
+
+def test_output_directory_resolves_actor_and_config_paths(tmp_path):
+    output_dir, checkpoint_path, config_path = resolve_training_output_paths(tmp_path / "run_a")
+
+    assert output_dir == tmp_path / "run_a"
+    assert checkpoint_path == tmp_path / "run_a" / "actor.pt"
+    assert config_path == tmp_path / "run_a" / "config.yaml"
+
+
+def test_actor_checkpoint_directory_prefers_actor_pt(tmp_path):
+    run_dir = tmp_path / "run_a"
+    run_dir.mkdir()
+    actor_path = run_dir / "actor.pt"
+    actor_path.write_bytes(b"placeholder")
+
+    assert resolve_actor_checkpoint_path(run_dir) == actor_path

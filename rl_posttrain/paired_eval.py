@@ -43,6 +43,26 @@ def _resolved_model_path(args: argparse.Namespace) -> str:
     )
 
 
+def _resolve_actor_checkpoint_path(path: str | Path) -> Path:
+    path = Path(path).expanduser()
+    if path.is_dir():
+        preferred = [path / "actor.pt", path / "checkpoint.pt"]
+        for candidate in preferred:
+            if candidate.is_file():
+                return candidate
+        pt_files = sorted(path.glob("*.pt"))
+        if len(pt_files) == 1:
+            return pt_files[0]
+        if not pt_files:
+            raise FileNotFoundError(f"Actor checkpoint directory contains no .pt file: {path}")
+        raise ValueError(
+            f"Actor checkpoint directory contains multiple .pt files and no actor.pt: {path}"
+        )
+    if not path.is_file():
+        raise FileNotFoundError(f"Actor checkpoint path does not exist or is not a file/directory: {path}")
+    return path
+
+
 def _parse_results(path: Path) -> List[bool]:
     if not path.exists():
         raise FileNotFoundError(f"Missing eval result file: {path}")
@@ -283,12 +303,8 @@ def main() -> None:
     args = parser.parse_args()
 
     actor_checkpoint_paths = [Path(path).expanduser() for path in args.actor_checkpoint]
-    missing_checkpoints = [str(path) for path in actor_checkpoint_paths if not path.is_file()]
-    if missing_checkpoints:
-        raise FileNotFoundError(
-            "Actor checkpoint path(s) do not exist or are not files: "
-            + ", ".join(missing_checkpoints)
-        )
+    for path in actor_checkpoint_paths:
+        _resolve_actor_checkpoint_path(path)
     args.actor_checkpoint = [str(path) for path in actor_checkpoint_paths]
     model_path = Path(_resolved_model_path(args)).expanduser()
     if not model_path.exists():

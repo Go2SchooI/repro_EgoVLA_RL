@@ -277,9 +277,11 @@ Stage 3 pure BC training:
 conda activate env_isaaclab
 python -m rl_posttrain.td3bc_ref \
   --replay playground_eval/replays/base_replay.npz \
-  --output playground_eval/rl_checkpoints/pure_bc.pt \
+  --output playground_eval/rl_checkpoints/pure_bc \
   --td3bc_alpha 0.0 --td3bc_bc_weight 1.0
 ```
+
+Training writes a small output folder by default: `actor.pt` plus `config.yaml`, for example `playground_eval/rl_checkpoints/pure_bc/actor.pt` and `playground_eval/rl_checkpoints/pure_bc/config.yaml`. Legacy `--output some_name.pt` still works. To log metrics to Weights & Biases, add `--wandb_project <project>` and optionally `--wandb_run_name`, `--wandb_group`, `--wandb_tags`, or `--wandb_mode offline`.
 
 `--replay` may point to one replay `.npz` or to a replay directory; directories are loaded recursively and canonical action normalization is re-fit from all `bc_target_raw` fields before training.
 
@@ -288,13 +290,13 @@ Stage 4 actor eval and paired eval:
 ```bash
 conda activate env_isaaclab
 RL_MODE=actor \
-RL_ACTOR_CHECKPOINT=playground_eval/rl_checkpoints/pure_bc.pt \
+RL_ACTOR_CHECKPOINT=playground_eval/rl_checkpoints/pure_bc \
 SAVE_VIDEO=1 SAVE_FRAMES=0 PROJECT_TRAJS=0 \
 ./run_local_eval.sh
 
 conda activate env_isaaclab
 python -m rl_posttrain.paired_eval \
-  --actor_checkpoint playground_eval/rl_checkpoints/pure_bc.pt
+  --actor_checkpoint playground_eval/rl_checkpoints/pure_bc
 ```
 
 `paired_eval` records mp4 videos by default under each mode's `videos/` directory; pass `--no_save_video` to disable that. It can compare multiple actor checkpoints against one shared baseline run. Use repeated `--scene ROOM TABLE` to evaluate several room/table pairs into one top-level folder with an aggregate `paired_summary.json`:
@@ -303,8 +305,8 @@ python -m rl_posttrain.paired_eval \
 conda activate env_isaaclab
 python -m rl_posttrain.paired_eval \
   --actor_checkpoint \
-    playground_eval/rl_checkpoints/pure_bc.pt \
-    playground_eval/rl_checkpoints/td3bc_alpha003.pt \
+    playground_eval/rl_checkpoints/pure_bc \
+    playground_eval/rl_checkpoints/td3bc_alpha003 \
   --task Humanoid-Open-Laptop-v0 \
   --model_path checkpoints/ego_vla_checkpoint/checkpoint-3000 \
   --scene 1 1 \
@@ -324,7 +326,7 @@ Stage 5 weak-Q TD3+BC should be tried only after pure BC paired eval is safe:
 conda activate env_isaaclab
 python -m rl_posttrain.td3bc_ref \
   --replay playground_eval/replays/base_replay.npz \
-  --output playground_eval/rl_checkpoints/td3bc_alpha01.pt \
+  --output playground_eval/rl_checkpoints/td3bc_alpha01 \
   --td3bc_alpha 0.1 --td3bc_bc_weight 1.0
 ```
 
