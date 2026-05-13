@@ -15,6 +15,7 @@ from torch import nn
 
 from rl_posttrain.actors import DeterministicActor
 from rl_posttrain.critics import DoubleQCritic
+from rl_posttrain.h_summary import HSummaryConfig, module_grad_norm, module_num_parameters, module_param_norm
 from rl_posttrain.normalizer import AffineNormalizer
 from rl_posttrain.replay_buffer import OfflineReplayBuffer
 
@@ -36,6 +37,7 @@ class TD3BCConfig:
     batch_size: int = 256
     obs_normalize: bool = True
     action_norm_clip: float = 1.0
+    h_summary: HSummaryConfig = HSummaryConfig()
 
 
 def _to_tensor(array: np.ndarray, device: torch.device) -> torch.Tensor:
@@ -158,12 +160,15 @@ class TD3BCTrainer:
             prepared.actor_obs_dim,
             prepared.action_dim,
             cfg.actor_hidden_dims,
+            h_summary=cfg.h_summary,
         ).to(self.device)
         self.actor_target = copy.deepcopy(self.actor).to(self.device)
         self.critic = DoubleQCritic(
             prepared.critic_obs_dim,
             prepared.action_dim,
             cfg.critic_hidden_dims,
+            h_summary=cfg.h_summary,
+            actor_obs_dim=prepared.actor_obs_dim,
         ).to(self.device)
         self.critic_target = copy.deepcopy(self.critic).to(self.device)
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr_actor)
@@ -187,6 +192,10 @@ class TD3BCTrainer:
         critic_loss = F.mse_loss(current_q1, y) + F.mse_loss(current_q2, y)
         self.critic_opt.zero_grad(set_to_none=True)
         critic_loss.backward()
+        critic_h_grad_norm = (
+            module_grad_norm(self.critic.q1_obs_processor.h_processor)
+            + module_grad_norm(self.critic.q2_obs_processor.h_processor)
+        )
         self.critic_opt.step()
 
         logs = {
@@ -201,6 +210,18 @@ class TD3BCTrainer:
             "lambda_q": 0.0,
             "mean_abs_actor_minus_ref_norm": 0.0,
             "max_abs_actor_minus_ref_norm": 0.0,
+            "h_actor_param_norm": module_param_norm(self.actor.obs_processor.h_processor),
+            "h_actor_projector_num_params": float(module_num_parameters(self.actor.obs_processor.h_processor)),
+            "h_actor_grad_norm": 0.0,
+            "h_critic_param_norm": (
+                module_param_norm(self.critic.q1_obs_processor.h_processor)
+                + module_param_norm(self.critic.q2_obs_processor.h_processor)
+            ),
+            "h_critic_projector_num_params": float(
+                module_num_parameters(self.critic.q1_obs_processor.h_processor)
+                + module_num_parameters(self.critic.q2_obs_processor.h_processor)
+            ),
+            "h_critic_grad_norm": float(critic_h_grad_norm),
         }
 
         if self.total_it % self.cfg.policy_delay == 0:
@@ -217,10 +238,12 @@ class TD3BCTrainer:
             actor_loss = -lambda_q * q_pi.mean() + self.cfg.td3bc_bc_weight * bc_loss
             self.actor_opt.zero_grad(set_to_none=True)
             actor_loss.backward()
+            actor_h_grad_norm = module_grad_norm(self.actor.obs_processor.h_processor)
             self.actor_opt.step()
             _soft_update(self.actor, self.actor_target, self.cfg.tau)
             _soft_update(self.critic, self.critic_target, self.cfg.tau)
             diff = (action_pi.detach() - batch["bc_target_norm"]).abs()
+            group_errors = action_group_errors(diff)
             logs.update(
                 {
                     "actor_loss": float(actor_loss.detach().cpu()),
@@ -229,6 +252,20 @@ class TD3BCTrainer:
                     "lambda_q": float(lambda_q.detach().cpu()),
                     "mean_abs_actor_minus_ref_norm": float(diff.mean().cpu()),
                     "max_abs_actor_minus_ref_norm": float(diff.max().cpu()),
+                    "h_actor_param_norm": module_param_norm(self.actor.obs_processor.h_processor),
+                    "h_actor_projector_num_params": float(
+                        module_num_parameters(self.actor.obs_processor.h_processor)
+                    ),
+                    "h_actor_grad_norm": float(actor_h_grad_norm),
+                    "h_critic_param_norm": (
+                        module_param_norm(self.critic.q1_obs_processor.h_processor)
+                        + module_param_norm(self.critic.q2_obs_processor.h_processor)
+                    ),
+                    "h_critic_projector_num_params": float(
+                        module_num_parameters(self.critic.q1_obs_processor.h_processor)
+                        + module_num_parameters(self.critic.q2_obs_processor.h_processor)
+                    ),
+                    **group_errors,
                 }
             )
 
@@ -248,6 +285,9 @@ class TD3BCTrainer:
                 "action_dim": self.prepared.action_dim,
                 "actor_hidden_dims": tuple(self.cfg.actor_hidden_dims),
                 "critic_hidden_dims": tuple(self.cfg.critic_hidden_dims),
+                "h_summary": self.cfg.h_summary.state_dict(),
+                "actor_processed_obs_dim": int(self.actor.processed_obs_dim),
+                "critic_processed_obs_dim": int(self.critic.processed_obs_dim),
                 "action_normalizer": self.prepared.action_normalizer.state_dict(),
                 "actor_obs_normalizer": self.prepared.actor_obs_normalizer.state_dict(),
                 "critic_obs_normalizer": self.prepared.critic_obs_normalizer.state_dict(),
@@ -265,10 +305,12 @@ def load_actor_policy(path: str | Path, device: str | torch.device = "cuda"):
         checkpoint = torch.load(path, map_location=device)
     if checkpoint.get("format") != "td3bc_ref_actor_v1":
         raise ValueError(f"Unsupported actor checkpoint format: {checkpoint.get('format')!r}")
+    h_summary = HSummaryConfig.from_state_dict(checkpoint.get("h_summary"))
     actor = DeterministicActor(
         int(checkpoint["actor_obs_dim"]),
         int(checkpoint["action_dim"]),
         tuple(checkpoint["actor_hidden_dims"]),
+        h_summary=h_summary,
     ).to(device)
     actor.load_state_dict(checkpoint["actor_state_dict"])
     actor.eval()
@@ -277,11 +319,44 @@ def load_actor_policy(path: str | Path, device: str | torch.device = "cuda"):
         "action_normalizer": AffineNormalizer.from_state_dict(checkpoint["action_normalizer"]),
         "actor_obs_normalizer": AffineNormalizer.from_state_dict(checkpoint["actor_obs_normalizer"]),
         "checkpoint": checkpoint,
+        "h_summary": h_summary,
+    }
+
+
+def action_group_errors(diff: torch.Tensor) -> Dict[str, float]:
+    if diff.shape[-1] != 38:
+        return {}
+    groups = {
+        "actor_ref_error_left_ee": slice(0, 7),
+        "actor_ref_error_right_ee": slice(7, 14),
+        "actor_ref_error_left_qpos": slice(14, 26),
+        "actor_ref_error_right_qpos": slice(26, 38),
+    }
+    return {
+        key: float(diff[..., value].mean().detach().cpu())
+        for key, value in groups.items()
     }
 
 
 def parse_hidden_dims(value: str) -> tuple[int, ...]:
     return tuple(int(item) for item in value.split(",") if item.strip())
+
+
+def parse_h_summary_config(args: argparse.Namespace) -> HSummaryConfig:
+    mode = str(args.h_summary_mode)
+    out_dim = args.h_summary_out_dim
+    if mode == "h_proj256":
+        out_dim = 256
+    elif mode == "h_proj128":
+        out_dim = 128
+    return HSummaryConfig(
+        mode=mode,
+        h_dim=int(args.h_summary_h_dim),
+        out_dim=None if out_dim is None else int(out_dim),
+        trainable=not bool(args.h_summary_frozen),
+        layernorm=not bool(args.no_h_summary_layernorm),
+        requested_mode=str(args.h_summary_mode),
+    )
 
 
 def resolve_actor_checkpoint_path(path: str | Path) -> Path:
@@ -481,6 +556,34 @@ def main() -> None:
     parser.add_argument("--actor_hidden_dims", default="1024,1024,512")
     parser.add_argument("--critic_hidden_dims", default="1024,1024,512")
     parser.add_argument("--replay_filter", default="base_only", choices=("base_only", "all"))
+    parser.add_argument(
+        "--h_summary_mode",
+        default="full_h",
+        choices=("full_h", "h_zero", "h_proj", "h_proj256", "h_proj128"),
+        help="Ablation mode for the h_summary prefix inside actor/critic networks.",
+    )
+    parser.add_argument(
+        "--h_summary_h_dim",
+        type=int,
+        default=1536,
+        help="Dimension of h_summary at the start of actor_obs.",
+    )
+    parser.add_argument(
+        "--h_summary_out_dim",
+        type=int,
+        default=None,
+        help="Projection output dim when --h_summary_mode=h_proj. h_proj256/128 set this automatically.",
+    )
+    parser.add_argument(
+        "--h_summary_frozen",
+        action="store_true",
+        help="Freeze h_summary projection parameters. Mainly for diagnostics.",
+    )
+    parser.add_argument(
+        "--no_h_summary_layernorm",
+        action="store_true",
+        help="Disable LayerNorm inside h_proj.",
+    )
     parser.add_argument("--wandb_project", default=None, help="If set, log TD3+BC metrics to this wandb project.")
     parser.add_argument("--wandb_entity", default=None)
     parser.add_argument("--wandb_run_name", default=None)
@@ -511,6 +614,7 @@ def main() -> None:
         policy_delay=int(args.policy_delay),
         obs_normalize=not bool(args.no_obs_normalize),
         action_norm_clip=float(args.action_norm_clip),
+        h_summary=parse_h_summary_config(args),
     )
     prepared = PreparedReplay(replay, cfg)
     trainer = TD3BCTrainer(prepared, cfg, device=args.device, seed=args.seed)
@@ -522,6 +626,20 @@ def main() -> None:
         f"replay_size={prepared.size} actor_obs_dim={prepared.actor_obs_dim} "
         f"critic_obs_dim={prepared.critic_obs_dim} action_dim={prepared.action_dim} "
         f"alpha={cfg.td3bc_alpha} bc_weight={cfg.td3bc_bc_weight}"
+    )
+    print(
+        "[td3bc] "
+        f"h_summary_enabled=True requested_mode={cfg.h_summary.requested_mode} "
+        f"mode={cfg.h_summary.mode} h_dim={cfg.h_summary.h_dim} "
+        f"h_out_dim={cfg.h_summary.out_dim} trainable={cfg.h_summary.trainable} "
+        f"raw_actor_obs_dim={prepared.actor_obs_dim} "
+        f"processed_actor_input_dim={trainer.actor.processed_obs_dim} "
+        f"raw_critic_obs_dim={prepared.critic_obs_dim} "
+        f"processed_critic_input_dim={trainer.critic.processed_obs_dim} "
+        f"action_dim={prepared.action_dim} "
+        f"h_actor_projector_num_params={module_num_parameters(trainer.actor.obs_processor.h_processor)} "
+        f"h_critic_projector_num_params="
+        f"{module_num_parameters(trainer.critic.q1_obs_processor.h_processor) + module_num_parameters(trainer.critic.q2_obs_processor.h_processor)}"
     )
     print(f"[td3bc] output_dir={output_dir}")
     print(f"[td3bc] saved_training_config={config_path}")

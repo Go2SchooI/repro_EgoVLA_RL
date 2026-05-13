@@ -23,6 +23,13 @@ rl:
   action_norm_clip: 1.0
   obs_normalize: true
   action_normalize: true
+  h_summary:
+    enabled: true
+    mode: full_h        # full_h / h_zero / h_proj256 / h_proj128 / h_proj
+    h_dim: 1536         # Open-Laptop checkpoint-3000 h_summary dim; override if feature hook changes.
+    out_dim: null       # Set only with mode=h_proj. h_proj256/h_proj128 infer this.
+    trainable: true
+    layernorm: true
   save_every: 10000
   log_every: 100
   isaac_env_name: env_isaaclab

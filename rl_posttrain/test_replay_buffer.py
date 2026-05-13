@@ -93,3 +93,34 @@ def test_load_directory_merges_replays_with_global_action_normalizer(tmp_path):
     )
     np.testing.assert_allclose(replay.arrays["actor_obs"][:, -3:], replay.arrays["bc_target_norm"])
     np.testing.assert_allclose(replay.arrays["critic_obs"][:, :5], replay.arrays["actor_obs"])
+
+
+def test_load_directory_recanonicalizes_legacy_child_norm_fields(tmp_path):
+    replay_dir = tmp_path / "replays"
+    replay_dir.mkdir()
+
+    writer_a = ReplayBufferWriter(replay_dir / "a.npz", metadata={"room_idx": 1})
+    writer_a.add(_transition("base", action=[0.0, 0.0, 0.0], next_action=[2.0, 2.0, 2.0]))
+    writer_a.add(_transition("base", action=[2.0, 2.0, 2.0], next_action=[0.0, 0.0, 0.0]))
+    writer_a.save()
+
+    writer_b = ReplayBufferWriter(replay_dir / "b.npz", metadata={"room_idx": 2})
+    writer_b.add(_transition("base", action=[10.0, 10.0, 10.0], next_action=[12.0, 12.0, 12.0]))
+    writer_b.add(_transition("base", action=[12.0, 12.0, 12.0], next_action=[10.0, 10.0, 10.0]))
+    writer_b.save()
+
+    # Simulate an older child replay whose saved local action_norm is not trustworthy.
+    path = replay_dir / "b.npz"
+    data = dict(np.load(path, allow_pickle=False))
+    data["action_norm"] = data["action_norm"] * 3.0
+    np.savez_compressed(path, **data)
+
+    with pytest.raises(ValueError, match="outside canonical normalized range"):
+        OfflineReplayBuffer.load(path)
+
+    replay = OfflineReplayBuffer.load(replay_dir, replay_filter="base_only")
+
+    assert replay.metadata["num_replays"] == 2
+    assert float(np.max(np.abs(replay.arrays["action_norm"]))) <= 1.0
+    assert float(np.max(np.abs(replay.arrays["bc_target_norm"]))) <= 1.0
+    np.testing.assert_allclose(replay.arrays["actor_obs"][:, -3:], replay.arrays["bc_target_norm"])

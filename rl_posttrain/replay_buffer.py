@@ -248,6 +248,7 @@ class OfflineReplayBuffer:
         arrays: Mapping[str, np.ndarray],
         metadata: Optional[Dict[str, Any]] = None,
         action_normalizer: Optional[AffineNormalizer] = None,
+        validate_norm_range: bool = True,
     ):
         self.arrays = dict(arrays)
         self.metadata = metadata or {}
@@ -266,13 +267,18 @@ class OfflineReplayBuffer:
             if not np.all(np.isfinite(value)):
                 raise ValueError(f"Replay field {field!r} contains non-finite values.")
             max_abs = float(np.max(np.abs(value)))
-            if max_abs > 1.0 + 1.0e-5:
+            if validate_norm_range and max_abs > 1.0 + 1.0e-5:
                 raise ValueError(
                     f"Replay field {field!r} is outside canonical normalized range [-1, 1]: max_abs={max_abs}."
                 )
 
     @classmethod
-    def load(cls, path: str | Path, replay_filter: str = "all") -> "OfflineReplayBuffer":
+    def load(
+        cls,
+        path: str | Path,
+        replay_filter: str = "all",
+        validate_norm_range: bool = True,
+    ) -> "OfflineReplayBuffer":
         path = Path(path)
         if path.is_dir():
             paths = sorted(item for item in path.rglob("*.npz") if item.is_file())
@@ -302,7 +308,12 @@ class OfflineReplayBuffer:
         metadata = {}
         if "metadata_json" in data.files:
             metadata = json.loads(str(data["metadata_json"].item()))
-        replay = cls(arrays, metadata, action_normalizer=action_normalizer)
+        replay = cls(
+            arrays,
+            metadata,
+            action_normalizer=action_normalizer,
+            validate_norm_range=validate_norm_range,
+        )
         return replay._apply_filter(replay_filter)
 
     @classmethod
@@ -313,7 +324,7 @@ class OfflineReplayBuffer:
         if len(replay_paths) == 1:
             return cls.load(replay_paths[0], replay_filter=replay_filter)
 
-        replays = [cls.load(path, replay_filter="all") for path in replay_paths]
+        replays = [cls.load(path, replay_filter="all", validate_norm_range=False) for path in replay_paths]
         required_raw = set(RAW_ACTION_FIELDS)
         for path, replay in zip(replay_paths, replays):
             missing_raw = sorted(required_raw.difference(replay.arrays))

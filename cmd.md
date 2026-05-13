@@ -122,18 +122,31 @@ python -m rl_posttrain.td3bc_ref \
 # 训练会输出一个目录，里面包含 actor.pt 和 config.yaml。
 # 如需推送 wandb，在命令末尾追加：
 #   --wandb_project egovla-td3bc --wandb_run_name ${TAG}_${ALPHA_TAG} --wandb_tags open_laptop,td3bc,${ALPHA_TAG}
-ALPHA_TAG=alpha003
+ALPHA_TAG=alpha0015
 TD3BC_CKPT=playground_eval/rl_checkpoints/${TAG}_td3bc_${ALPHA_TAG}
 python -m rl_posttrain.td3bc_ref \
   --replay ${REPLAY_DIR} \
   --output ${TD3BC_CKPT} \
-  --steps 75000 \
+  --steps 150000 \
   --batch_size 256 \
-  --td3bc_alpha 0.03 \
+  --td3bc_alpha 0.015 \
   --td3bc_bc_weight 1.0 \
   --policy_delay 2 \
   --log_every 100 \
-  --device cuda
+  --device cuda 
+
+python -m rl_posttrain.td3bc_ref \
+  --replay /home/jizexian/dexhand/EgoVLA_Release/playground_eval/replays/open_laptop_v4_checkpoint3000_20260509_174957 \
+  --output playground_eval/rl_checkpoints/open_laptop_v4_retrain_checkpoint3000_alpha0005 \
+  --steps 150000 \
+  --batch_size 256 \
+  --td3bc_alpha 0.005 \
+  --td3bc_bc_weight 1.0 \
+  --policy_delay 2 \
+  --log_every 100 \
+  --device cuda \
+  --wandb_project egovla-td3bc \
+  --wandb_run_name open_laptop_v4_retrain_checkpoint3000_alpha0005
 
 # 3. Paired Eval: 一次对比多个 actor checkpoint，跳过 identity
 # paired_eval 默认保存视频；如不想保存视频，加 --no_save_video

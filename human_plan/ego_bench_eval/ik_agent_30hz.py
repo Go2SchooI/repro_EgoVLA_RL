@@ -735,7 +735,11 @@ def main():
         "[rl-actor] "
         f"loaded_checkpoint={rl_actor_checkpoint} "
         f"actor_obs_dim={rl_actor_bundle['checkpoint']['actor_obs_dim']} "
-        f"action_dim={rl_actor_bundle['checkpoint']['action_dim']}"
+        f"action_dim={rl_actor_bundle['checkpoint']['action_dim']} "
+        f"h_summary_requested_mode={rl_actor_bundle['h_summary'].requested_mode} "
+        f"h_summary_mode={rl_actor_bundle['h_summary'].mode} "
+        f"h_dim={rl_actor_bundle['h_summary'].h_dim} "
+        f"h_out_dim={rl_actor_bundle['h_summary'].out_dim}"
       )
     if rl_collect_enabled or rl_actor_enabled:
       for param in model.parameters():

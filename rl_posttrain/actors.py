@@ -5,6 +5,8 @@ from typing import Sequence
 import torch
 from torch import nn
 
+from rl_posttrain.h_summary import HObsProcessor, HSummaryConfig
+
 
 def build_mlp(input_dim: int, hidden_dims: Sequence[int], output_dim: int, output_activation=None) -> nn.Sequential:
     if input_dim <= 0 or output_dim <= 0:
@@ -25,14 +27,22 @@ def build_mlp(input_dim: int, hidden_dims: Sequence[int], output_dim: int, outpu
 class DeterministicActor(nn.Module):
     """TD3+BC actor: deterministic tanh policy, no log_std/log_prob/SAC bits."""
 
-    def __init__(self, obs_dim: int, action_dim: int, hidden_dims: Sequence[int] = (1024, 1024, 512)):
+    def __init__(
+        self,
+        obs_dim: int,
+        action_dim: int,
+        hidden_dims: Sequence[int] = (1024, 1024, 512),
+        h_summary: HSummaryConfig | None = None,
+    ):
         super().__init__()
         self.obs_dim = int(obs_dim)
         self.action_dim = int(action_dim)
-        self.net = build_mlp(self.obs_dim, hidden_dims, self.action_dim)
+        self.h_summary = h_summary or HSummaryConfig(mode="full_h")
+        self.obs_processor = HObsProcessor(self.obs_dim, self.h_summary)
+        self.processed_obs_dim = int(self.obs_processor.processed_obs_dim)
+        self.net = build_mlp(self.processed_obs_dim, hidden_dims, self.action_dim)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         if obs.shape[-1] != self.obs_dim:
             raise ValueError(f"Actor expected obs dim {self.obs_dim}, got {obs.shape}.")
-        return torch.tanh(self.net(obs))
-
+        return torch.tanh(self.net(self.obs_processor(obs)))

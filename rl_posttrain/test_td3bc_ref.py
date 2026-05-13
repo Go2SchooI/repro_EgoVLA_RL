@@ -4,11 +4,13 @@ import pytest
 
 from rl_posttrain.normalizer import AffineNormalizer
 from rl_posttrain.replay_buffer import OfflineReplayBuffer
+from rl_posttrain.h_summary import HSummaryConfig
 from rl_posttrain.td3bc_ref import (
     PreparedReplay,
     TD3BCConfig,
     TD3BCTrainer,
     build_training_config_payload,
+    load_actor_policy,
     resolve_actor_checkpoint_path,
     resolve_training_output_paths,
     write_training_yaml,
@@ -116,3 +118,53 @@ def test_actor_checkpoint_directory_prefers_actor_pt(tmp_path):
     actor_path.write_bytes(b"placeholder")
 
     assert resolve_actor_checkpoint_path(run_dir) == actor_path
+
+
+def test_h_zero_keeps_raw_actor_input_dim():
+    replay = _synthetic_replay()
+    cfg = TD3BCConfig(
+        actor_hidden_dims=(16,),
+        critic_hidden_dims=(16,),
+        batch_size=8,
+        h_summary=HSummaryConfig(mode="h_zero", h_dim=2),
+    )
+    prepared = PreparedReplay(replay, cfg)
+    trainer = TD3BCTrainer(prepared, cfg, device="cpu", seed=0)
+
+    assert trainer.actor.processed_obs_dim == prepared.actor_obs_dim
+    assert trainer.critic.processed_obs_dim == prepared.critic_obs_dim
+    logs = trainer.train_step()
+    assert "h_actor_param_norm" in logs
+
+
+def test_h_proj_changes_processed_dims_and_roundtrips_checkpoint(tmp_path):
+    replay = _synthetic_replay()
+    cfg = TD3BCConfig(
+        actor_hidden_dims=(16,),
+        critic_hidden_dims=(16,),
+        batch_size=8,
+        policy_delay=1,
+        h_summary=HSummaryConfig(mode="h_proj", h_dim=2, out_dim=4),
+    )
+    prepared = PreparedReplay(replay, cfg)
+    trainer = TD3BCTrainer(prepared, cfg, device="cpu", seed=0)
+
+    assert trainer.actor.processed_obs_dim == prepared.actor_obs_dim - 2 + 4
+    assert trainer.critic.processed_obs_dim == prepared.critic_obs_dim - 2 + 4
+    logs = trainer.train_step()
+    assert logs["h_actor_param_norm"] > 0.0
+
+    checkpoint_path = trainer.save(tmp_path / "actor.pt")
+    bundle = load_actor_policy(checkpoint_path, device="cpu")
+    assert bundle["h_summary"].mode == "h_proj"
+    assert bundle["h_summary"].requested_mode == "h_proj"
+    assert bundle["h_summary"].out_dim == 4
+    assert bundle["actor"].processed_obs_dim == prepared.actor_obs_dim - 2 + 4
+
+
+def test_h_proj_alias_preserves_requested_mode():
+    cfg = HSummaryConfig(mode="h_proj256", h_dim=8)
+
+    assert cfg.mode == "h_proj"
+    assert cfg.requested_mode == "h_proj256"
+    assert cfg.out_dim == 256
