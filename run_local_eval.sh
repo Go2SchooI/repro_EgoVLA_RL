@@ -40,6 +40,9 @@ RL_ACTOR_CHECKPOINT="${RL_ACTOR_CHECKPOINT:-}"
 RL_COLLECT_REPLAY_PATH="${RL_COLLECT_REPLAY_PATH:-}"
 RL_COLLECT_SOURCE="${RL_COLLECT_SOURCE:-base}"
 RL_COLLECT_SAVE_RAW="${RL_COLLECT_SAVE_RAW:-0}"
+RL_EXPLORATION_NOISE_STD="${RL_EXPLORATION_NOISE_STD:-0}"
+RL_EXPLORATION_NOISE_CLIP="${RL_EXPLORATION_NOISE_CLIP:-0}"
+RL_EXPLORATION_NOISE_SEED="${RL_EXPLORATION_NOISE_SEED:-0}"
 
 MODEL_PATH="${MODEL_PATH:-$REPO_ROOT/checkpoints/ego_vla_checkpoint/ckpt-human-video-pretrained}"
 DEFAULT_ADDITIONAL_LABEL="$(basename "${MODEL_PATH%/}")"
@@ -99,6 +102,9 @@ echo "RL action trace steps: $RL_ACTION_TRACE_STEPS"
 echo "RL actor checkpoint: $RL_ACTOR_CHECKPOINT"
 echo "RL collect replay path: $RL_COLLECT_REPLAY_PATH"
 echo "RL collect source: $RL_COLLECT_SOURCE"
+echo "RL exploration noise std: $RL_EXPLORATION_NOISE_STD"
+echo "RL exploration noise clip: $RL_EXPLORATION_NOISE_CLIP"
+echo "RL exploration noise seed: $RL_EXPLORATION_NOISE_SEED"
 echo "Episode start idx: $EPISODE_START_IDX"
 echo "Trial start idx: $TRIAL_START_IDX"
 echo "Randomize total episodes: $RANDOMIZE_TOTAL_EPISODES"
@@ -207,6 +213,9 @@ export PYTHONPATH="$VENDOR_PY:$REPO_ROOT:$REPO_ROOT/VILA:$REPO_ROOT/manopth${PYT
   --rl_action_trace_steps "$RL_ACTION_TRACE_STEPS" \
   --rl_identity_tolerance "$RL_IDENTITY_TOLERANCE" \
   --rl_collect_source "$RL_COLLECT_SOURCE" \
+  --rl_exploration_noise_std "$RL_EXPLORATION_NOISE_STD" \
+  --rl_exploration_noise_clip "$RL_EXPLORATION_NOISE_CLIP" \
+  --rl_exploration_noise_seed "$RL_EXPLORATION_NOISE_SEED" \
   $([[ "$RL_ACTION_TRACE" == "1" ]] && printf '%s' "--rl_action_trace") \
   $([[ -n "$RL_ACTOR_CHECKPOINT" ]] && printf '%s %q' "--rl_actor_checkpoint" "$RL_ACTOR_CHECKPOINT") \
   $([[ -n "$RL_COLLECT_REPLAY_PATH" ]] && printf '%s %q' "--rl_collect_replay_path" "$RL_COLLECT_REPLAY_PATH") \

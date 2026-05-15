@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from rl_posttrain.replay_buffer import OfflineReplayBuffer, ReplayBufferWriter
+from rl_posttrain.normalizer import AffineNormalizer
+from rl_posttrain.replay_buffer import OfflineReplayBuffer, OnlineReplayBufferWriter, ReplayBufferWriter
 
 
 def _transition(source="base", action=None, next_action=None):
@@ -53,6 +54,64 @@ def test_replay_writer_rejects_source_outside_base_identity(tmp_path):
     writer = ReplayBufferWriter(tmp_path / "bad.npz")
     with pytest.raises(ValueError, match="actor-generated data"):
         writer.add(_transition("td3bc_actor"))
+
+
+def test_online_replay_writer_preserves_checkpoint_action_space(tmp_path):
+    path = tmp_path / "online.npz"
+    action_normalizer = AffineNormalizer(
+        mean=np.asarray([10.0, 20.0, 30.0], dtype=np.float32),
+        scale=np.asarray([2.0, 4.0, 8.0], dtype=np.float32),
+    )
+    a_ref_norm = np.asarray([0.1, -0.2, 0.3], dtype=np.float32)
+    a_exec_norm = np.asarray([0.2, -0.1, 0.25], dtype=np.float32)
+    next_ref_norm = np.asarray([0.0, -0.3, 0.4], dtype=np.float32)
+    actor_obs = np.concatenate([np.asarray([1.0, 2.0], dtype=np.float32), a_ref_norm])
+    critic_obs = np.concatenate([actor_obs, np.asarray([3.0, 4.0], dtype=np.float32)])
+    next_actor_obs = np.concatenate([np.asarray([1.5, 2.5], dtype=np.float32), next_ref_norm])
+    next_critic_obs = np.concatenate([next_actor_obs, np.asarray([3.5, 4.5], dtype=np.float32)])
+    writer = OnlineReplayBufferWriter(
+        path,
+        action_normalizer=action_normalizer,
+        metadata={"task": "unit", "scene": "room1_table1"},
+    )
+    writer.add(
+        {
+            "actor_obs": actor_obs,
+            "critic_obs": critic_obs,
+            "action_norm": a_exec_norm,
+            "bc_target_norm": a_ref_norm,
+            "reward": np.asarray([1.0], dtype=np.float32),
+            "done": np.asarray([1.0], dtype=np.float32),
+            "next_actor_obs": next_actor_obs,
+            "next_critic_obs": next_critic_obs,
+            "next_bc_target_norm": next_ref_norm,
+            "a_exec_norm": a_exec_norm,
+            "a_ref_norm": a_ref_norm,
+            "next_a_ref_norm": next_ref_norm,
+            "action_raw": action_normalizer.denormalize(a_exec_norm),
+            "bc_target_raw": action_normalizer.denormalize(a_ref_norm),
+            "next_bc_target_raw": action_normalizer.denormalize(next_ref_norm),
+            "source": "online_actor",
+            "scene": "room1_table1",
+            "episode_id": 7,
+            "trial": 2,
+            "env_step": 3,
+            "success": 1.0,
+            "timeout": 0.0,
+            "mean_abs_actor_minus_ref_norm": float(np.abs(a_exec_norm - a_ref_norm).mean()),
+            "max_abs_actor_minus_ref_norm": float(np.abs(a_exec_norm - a_ref_norm).max()),
+        }
+    )
+    writer.save()
+
+    replay = OfflineReplayBuffer.load(path, replay_filter="all")
+    assert replay.size == 1
+    assert replay.arrays["source"].astype(str).tolist() == ["online_actor"]
+    assert replay.arrays["scene"].astype(str).tolist() == ["room1_table1"]
+    np.testing.assert_allclose(replay.action_normalizer.mean, action_normalizer.mean)
+    np.testing.assert_allclose(replay.arrays["a_ref_norm"], replay.arrays["bc_target_norm"])
+    np.testing.assert_allclose(replay.arrays["a_exec_norm"], replay.arrays["action_norm"])
+    np.testing.assert_allclose(replay.arrays["next_a_ref_norm"], replay.arrays["next_bc_target_norm"])
 
 
 def test_replay_writer_rejects_shape_changes(tmp_path):

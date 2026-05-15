@@ -210,13 +210,31 @@ parser.add_argument(
     "--rl_collect_source",
     type=str,
     default="base",
-    choices=("base", "identity"),
-    help="Replay source label for Stage-2 base collection.",
+    choices=("base", "identity", "online_actor"),
+    help="Replay source label. online_actor is only valid with --rl_mode=actor.",
 )
 parser.add_argument(
     "--rl_collect_save_raw",
     action="store_true",
     help="Also save a small raw/debug sidecar next to the fast replay .npz.",
+)
+parser.add_argument(
+    "--rl_exploration_noise_std",
+    type=float,
+    default=0.0,
+    help="Behavior exploration noise std in normalized action space. Eval should leave this at 0.",
+)
+parser.add_argument(
+    "--rl_exploration_noise_clip",
+    type=float,
+    default=0.0,
+    help="Behavior exploration noise clip in normalized action space.",
+)
+parser.add_argument(
+    "--rl_exploration_noise_seed",
+    type=int,
+    default=0,
+    help="Seed for behavior exploration noise.",
 )
 
 # append AppLauncher cli args
@@ -267,8 +285,23 @@ from rl_posttrain.obs_utils import (
     build_critic_obs,
     subtask_success_metrics,
 )
-from rl_posttrain.replay_buffer import ReplayBufferWriter
+from rl_posttrain.replay_buffer import OnlineReplayBufferWriter, ReplayBufferWriter
 from rl_posttrain.td3bc_ref import load_actor_policy
+
+
+def _serialize_action_spec(spec: ActionSpec):
+    return {
+        "dim": int(spec.dim),
+        "slices": [
+            {
+                "name": item.name,
+                "start": int(item.start),
+                "end": int(item.end),
+                "shape": [int(dim) for dim in item.shape],
+            }
+            for item in spec.slices
+        ],
+    }
 
 
 def _get_action_dim(env: BaseEnv) -> int:
@@ -655,7 +688,14 @@ def _record_trace_line(trace_lines, line: str) -> None:
     trace_lines.append(line)
 
 
-def _finalize_replay_transition(replay_writer, pending, next_actor_obs, next_critic_obs, next_bc_target_raw):
+def _finalize_replay_transition(
+    replay_writer,
+    pending,
+    next_actor_obs,
+    next_critic_obs,
+    next_bc_target_raw,
+    next_bc_target_norm=None,
+):
     transition = {
         "actor_obs": pending["actor_obs"],
         "critic_obs": pending["critic_obs"],
@@ -670,9 +710,38 @@ def _finalize_replay_transition(replay_writer, pending, next_actor_obs, next_cri
         "success": np.asarray([pending["success"]], dtype=np.float32),
         "timeout": np.asarray([pending["timeout"]], dtype=np.float32),
     }
-    for optional in ("episode_id", "episode_step", "episode_length", "episode_success", "episode_timeout"):
+    if "a_exec_norm" in pending and "a_ref_norm" in pending:
+      if next_bc_target_norm is None:
+        next_bc_target_norm = pending.get("next_a_ref_norm", pending["a_ref_norm"])
+      transition["action_norm"] = np.asarray(pending["a_exec_norm"], dtype=np.float32)
+      transition["bc_target_norm"] = np.asarray(pending["a_ref_norm"], dtype=np.float32)
+      transition["next_bc_target_norm"] = np.asarray(next_bc_target_norm, dtype=np.float32)
+      pending["next_a_ref_norm"] = np.asarray(next_bc_target_norm, dtype=np.float32)
+    for optional in (
+        "a_ref_norm",
+        "a_exec_norm",
+        "next_a_ref_norm",
+        "episode_id",
+        "episode_step",
+        "episode_length",
+        "episode_success",
+        "episode_timeout",
+        "trial",
+        "env_step",
+        "mean_abs_actor_minus_ref_norm",
+        "max_abs_actor_minus_ref_norm",
+        "num_clipped_dims",
+        "exploration_noise_std",
+        "exploration_noise_clip",
+    ):
       if optional in pending:
-        transition[optional] = np.asarray([pending[optional]], dtype=np.float32)
+        value = pending[optional]
+        if optional in ("a_ref_norm", "a_exec_norm", "next_a_ref_norm"):
+          transition[optional] = np.asarray(value, dtype=np.float32)
+        else:
+          transition[optional] = np.asarray([value], dtype=np.float32)
+    if "scene" in pending:
+      transition["scene"] = pending["scene"]
     raw = pending.get("raw")
     replay_writer.add(transition, raw=raw)
 
@@ -694,6 +763,9 @@ def main():
     rl_collect_enabled = rl_collect_replay_path is not None and str(rl_collect_replay_path).strip() != ""
     rl_collect_source = task_args.rl_collect_source
     rl_collect_save_raw = bool(task_args.rl_collect_save_raw)
+    rl_exploration_noise_std = float(task_args.rl_exploration_noise_std or 0.0)
+    rl_exploration_noise_clip = float(task_args.rl_exploration_noise_clip or 0.0)
+    rl_exploration_noise_seed = int(task_args.rl_exploration_noise_seed or 0)
     rl_insert_enabled = rl_mode != "off" or rl_action_trace or rl_collect_enabled
     image_update_active = image_update_interval <= 0 or image_update_interval > 1
     if image_update_active and image_delay_steps > 0:
@@ -709,11 +781,19 @@ def main():
       raise ValueError("proprio_ablation_mode='delay' requires proprio_delay_steps > 0.")
     if rl_identity_tolerance < 0:
       raise ValueError("rl_identity_tolerance must be >= 0.")
-    if rl_collect_enabled and rl_collect_source not in ("base", "identity"):
-      raise ValueError("rl_collect_source must be 'base' or 'identity'.")
+    if rl_collect_enabled and rl_collect_source not in ("base", "identity", "online_actor"):
+      raise ValueError("rl_collect_source must be 'base', 'identity', or 'online_actor'.")
+    if rl_collect_source == "online_actor" and not rl_actor_enabled:
+      raise ValueError("rl_collect_source='online_actor' requires --rl_mode=actor.")
+    if rl_collect_source != "online_actor" and rl_exploration_noise_std != 0.0:
+      raise ValueError("Behavior exploration noise is only supported for online_actor collection.")
+    if rl_exploration_noise_std < 0.0:
+      raise ValueError("rl_exploration_noise_std must be >= 0.")
+    if rl_exploration_noise_clip < 0.0:
+      raise ValueError("rl_exploration_noise_clip must be >= 0.")
     if rl_actor_enabled and (rl_actor_checkpoint is None or str(rl_actor_checkpoint).strip() == ""):
       raise ValueError("--rl_actor_checkpoint is required when --rl_mode=actor.")
-    if rl_actor_enabled and rl_collect_enabled:
+    if rl_actor_enabled and rl_collect_enabled and rl_collect_source != "online_actor":
       raise ValueError(
         "Stage-2 base replay collection only supports rl_mode=off/identity. "
         "Refusing to mix actor-generated data into the base replay."
@@ -861,6 +941,7 @@ def main():
 
     padding = 0
     vision_rng = np.random.default_rng(seed_map[task_args.task])
+    rl_exploration_rng = np.random.default_rng(rl_exploration_noise_seed)
     print(
       "[eval-ablation] "
       f"chunk_exec_len={chunk_exec_len} "
@@ -871,6 +952,8 @@ def main():
       f"rl_mode={rl_mode} "
       f"rl_action_trace={rl_action_trace} "
       f"rl_collect_enabled={rl_collect_enabled} "
+      f"rl_exploration_noise_std={rl_exploration_noise_std} "
+      f"rl_exploration_noise_clip={rl_exploration_noise_clip} "
       f"vision_input_mode={task_args.vision_input_mode}"
     )
     print(
@@ -896,27 +979,51 @@ def main():
         "[rl-collect] "
         f"path={rl_collect_replay_path} source={rl_collect_source} "
         "bc_target=canonical_action_norm_from_a_ref_raw "
-        "action_normalizer=fit_minmax_on_collected_bc_target_raw "
+        f"action_normalizer={'checkpoint' if rl_collect_source == 'online_actor' else 'fit_minmax_on_collected_bc_target_raw'} "
         "reward=sparse_final_success"
       )
 
     replay_writer = None
     rl_optional_warned = set()
     if rl_collect_enabled:
-      replay_writer = ReplayBufferWriter(
-        rl_collect_replay_path,
-        metadata={
-          "task": task_args.task,
-          "room_idx": room_idx,
-          "table_idx": table_idx,
-          "source": rl_collect_source,
-          "actor_insert_point": "after_temporal_smoothing",
-          "bc_target": "canonical_action_norm_from_a_ref_raw",
-          "action_normalizer_mode": "fit_minmax_on_collected_bc_target_raw",
-          "reward": "sparse_final_success",
-        },
-        save_raw=rl_collect_save_raw,
-      )
+      metadata = {
+        "task": task_args.task,
+        "room_idx": room_idx,
+        "table_idx": table_idx,
+        "scene": f"room{room_idx}_table{table_idx}",
+        "source": rl_collect_source,
+        "actor_insert_point": "after_temporal_smoothing",
+        "bc_target": (
+          "a_ref_norm"
+          if rl_collect_source == "online_actor"
+          else "canonical_action_norm_from_a_ref_raw"
+        ),
+        "reward": "sparse_final_success",
+        "exploration_noise_std": rl_exploration_noise_std,
+        "exploration_noise_clip": rl_exploration_noise_clip,
+      }
+      if rl_collect_source == "online_actor":
+        if rl_actor_bundle is None:
+          raise AssertionError("online_actor collection expected a loaded actor bundle.")
+        replay_writer = OnlineReplayBufferWriter(
+          rl_collect_replay_path,
+          action_normalizer=rl_actor_bundle["action_normalizer"],
+          metadata={
+            **metadata,
+            "action_normalizer_mode": "checkpoint",
+            "actor_checkpoint": str(rl_actor_checkpoint),
+          },
+          save_raw=rl_collect_save_raw,
+        )
+      else:
+        replay_writer = ReplayBufferWriter(
+          rl_collect_replay_path,
+          metadata={
+            **metadata,
+            "action_normalizer_mode": "fit_minmax_on_collected_bc_target_raw",
+          },
+          save_raw=rl_collect_save_raw,
+        )
 
     rl_episode_counter = 0
 
@@ -1178,6 +1285,8 @@ def main():
           if rl_insert_enabled:
             if rl_action_spec is None:
               rl_action_spec = ActionSpec.from_action_dict(a_ref_dict)
+              if replay_writer is not None:
+                replay_writer.metadata["action_spec"] = _serialize_action_spec(rl_action_spec)
               if rl_actor_enabled:
                 rl_action_normalizer = rl_actor_bundle["action_normalizer"]
                 normalizer_dim = int(rl_action_normalizer.mean.shape[0])
@@ -1253,6 +1362,19 @@ def main():
                   f"Actor output shape mismatch: got {a_exec_norm.shape}, "
                   f"expected {(rl_action_spec.dim,)}."
                 )
+              if rl_exploration_noise_std > 0.0:
+                exploration_noise = rl_exploration_rng.normal(
+                  loc=0.0,
+                  scale=rl_exploration_noise_std,
+                  size=a_exec_norm.shape,
+                ).astype(np.float32)
+                if rl_exploration_noise_clip > 0.0:
+                  exploration_noise = np.clip(
+                    exploration_noise,
+                    -rl_exploration_noise_clip,
+                    rl_exploration_noise_clip,
+                  )
+                a_exec_norm = a_exec_norm + exploration_noise
               a_exec_norm = np.clip(a_exec_norm, -1.0, 1.0).astype(np.float32, copy=False)
               actor_ref_abs = np.abs(a_exec_norm - a_ref_norm)
               rl_actor_ref_mean_abs_sum += float(actor_ref_abs.mean())
@@ -1372,24 +1494,37 @@ def main():
                 actor_obs,
                 critic_obs,
                 a_ref,
+                next_bc_target_norm=a_ref_norm,
               )
               rl_pending_transition = None
 
+            actor_ref_abs = np.abs(a_exec_norm - a_ref_norm)
             rl_pending_transition = {
               "actor_obs": actor_obs,
               "critic_obs": critic_obs,
               "action_raw": a_exec,
               "bc_target_raw": a_ref,
+              "a_ref_norm": a_ref_norm,
+              "a_exec_norm": a_exec_norm,
+              "next_a_ref_norm": a_ref_norm,
               "source": rl_collect_source,
+              "scene": f"room{room_idx}_table{table_idx}",
               "reward": 0.0,
               "done": 0.0,
               "success": 0.0,
               "timeout": 0.0,
               "episode_id": rl_episode_id,
               "episode_step": i + 1,
+              "trial": trial_idx,
+              "env_step": i + 1,
               "episode_length": 0.0,
               "episode_success": 0.0,
               "episode_timeout": 0.0,
+              "mean_abs_actor_minus_ref_norm": float(actor_ref_abs.mean()),
+              "max_abs_actor_minus_ref_norm": float(actor_ref_abs.max()),
+              "num_clipped_dims": int(np.sum(np.abs(a_exec_norm) >= 1.0 - 1.0e-6)),
+              "exploration_noise_std": rl_exploration_noise_std,
+              "exploration_noise_clip": rl_exploration_noise_clip,
               "raw": {
                 "episode_id": rl_episode_id,
                 "episode_label": episode_idx[0],
@@ -1463,6 +1598,7 @@ def main():
                 rl_pending_transition["actor_obs"],
                 rl_pending_transition["critic_obs"],
                 rl_pending_transition["bc_target_raw"],
+                next_bc_target_norm=rl_pending_transition["a_ref_norm"],
               )
               replay_writer.set_episode_result(
                 rl_episode_id,

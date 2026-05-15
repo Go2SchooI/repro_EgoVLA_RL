@@ -6,7 +6,7 @@ import json
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -109,6 +109,7 @@ class PreparedReplay:
         self.arrays["action_norm"] = replay.arrays["action_norm"].astype(np.float32, copy=True)
         self.arrays["bc_target_norm"] = replay.arrays["bc_target_norm"].astype(np.float32, copy=True)
         self.arrays["next_bc_target_norm"] = replay.arrays["next_bc_target_norm"].astype(np.float32, copy=True)
+        self.action_spec = _normalize_action_spec(replay.metadata.get("action_spec"), action_dim)
         for key in ("action_norm", "bc_target_norm", "next_bc_target_norm"):
             if np.max(np.abs(self.arrays[key])) > cfg.action_norm_clip + 1.0e-5:
                 raise AssertionError(f"{key} exceeded configured normalized range.")
@@ -155,6 +156,7 @@ class TD3BCTrainer:
         self.cfg = cfg
         self.device = torch.device(device if torch.cuda.is_available() or str(device) == "cpu" else "cpu")
         self.rng = np.random.default_rng(seed)
+        self.action_spec = prepared.action_spec
 
         self.actor = DeterministicActor(
             prepared.actor_obs_dim,
@@ -243,7 +245,6 @@ class TD3BCTrainer:
             _soft_update(self.actor, self.actor_target, self.cfg.tau)
             _soft_update(self.critic, self.critic_target, self.cfg.tau)
             diff = (action_pi.detach() - batch["bc_target_norm"]).abs()
-            group_errors = action_group_errors(diff)
             logs.update(
                 {
                     "actor_loss": float(actor_loss.detach().cpu()),
@@ -265,7 +266,7 @@ class TD3BCTrainer:
                         module_num_parameters(self.critic.q1_obs_processor.h_processor)
                         + module_num_parameters(self.critic.q2_obs_processor.h_processor)
                     ),
-                    **group_errors,
+                    **action_group_errors(diff, self.action_spec),
                 }
             )
 
@@ -291,6 +292,7 @@ class TD3BCTrainer:
                 "action_normalizer": self.prepared.action_normalizer.state_dict(),
                 "actor_obs_normalizer": self.prepared.actor_obs_normalizer.state_dict(),
                 "critic_obs_normalizer": self.prepared.critic_obs_normalizer.state_dict(),
+                "action_spec": self.action_spec,
             },
             path,
         )
@@ -303,7 +305,7 @@ def load_actor_policy(path: str | Path, device: str | torch.device = "cuda"):
         checkpoint = torch.load(path, map_location=device, weights_only=False)
     except TypeError:
         checkpoint = torch.load(path, map_location=device)
-    if checkpoint.get("format") != "td3bc_ref_actor_v1":
+    if checkpoint.get("format") not in ("td3bc_ref_actor_v1", "online_td3bc_checkpoint_v1"):
         raise ValueError(f"Unsupported actor checkpoint format: {checkpoint.get('format')!r}")
     h_summary = HSummaryConfig.from_state_dict(checkpoint.get("h_summary"))
     actor = DeterministicActor(
@@ -319,23 +321,78 @@ def load_actor_policy(path: str | Path, device: str | torch.device = "cuda"):
         "action_normalizer": AffineNormalizer.from_state_dict(checkpoint["action_normalizer"]),
         "actor_obs_normalizer": AffineNormalizer.from_state_dict(checkpoint["actor_obs_normalizer"]),
         "checkpoint": checkpoint,
+        "action_spec": _normalize_action_spec(checkpoint.get("action_spec"), int(checkpoint["action_dim"])),
         "h_summary": h_summary,
     }
 
 
-def action_group_errors(diff: torch.Tensor) -> Dict[str, float]:
-    if diff.shape[-1] != 38:
-        return {}
-    groups = {
-        "actor_ref_error_left_ee": slice(0, 7),
-        "actor_ref_error_right_ee": slice(7, 14),
-        "actor_ref_error_left_qpos": slice(14, 26),
-        "actor_ref_error_right_qpos": slice(26, 38),
-    }
-    return {
-        key: float(diff[..., value].mean().detach().cpu())
-        for key, value in groups.items()
-    }
+_DEFAULT_ACTION_GROUP_SPEC = (
+    {"name": "left_ee_pose", "start": 0, "end": 7, "shape": [7]},
+    {"name": "right_ee_pose", "start": 7, "end": 14, "shape": [7]},
+    {"name": "left_qpos", "start": 14, "end": 26, "shape": [12]},
+    {"name": "right_qpos", "start": 26, "end": 38, "shape": [12]},
+)
+
+_ACTION_GROUP_LOG_NAMES = {
+    "left_ee_pose": "actor_ref_error_left_ee",
+    "right_ee_pose": "actor_ref_error_right_ee",
+    "left_qpos": "actor_ref_error_left_qpos",
+    "right_qpos": "actor_ref_error_right_qpos",
+}
+
+
+def _default_action_spec(action_dim: int) -> Dict[str, Any] | None:
+    if int(action_dim) != 38:
+        return None
+    return {"dim": 38, "slices": [dict(item) for item in _DEFAULT_ACTION_GROUP_SPEC]}
+
+
+def _normalize_action_spec(action_spec: Mapping[str, Any] | None, action_dim: int) -> Dict[str, Any] | None:
+    if action_spec is None:
+        return _default_action_spec(action_dim)
+    spec_dim = int(action_spec.get("dim", action_dim))
+    if spec_dim != int(action_dim):
+        raise ValueError(f"Action spec dim {spec_dim} does not match action_dim {action_dim}.")
+    slices = action_spec.get("slices")
+    if slices is None:
+        return _default_action_spec(action_dim)
+    normalized_slices = []
+    for item in slices:
+        if not isinstance(item, Mapping):
+            raise ValueError(f"Action spec slices must be mappings, got {type(item).__name__}.")
+        name = str(item.get("name"))
+        if not name:
+            raise ValueError("Action spec slice is missing a name.")
+        start = int(item.get("start"))
+        end = int(item.get("end"))
+        if end <= start:
+            raise ValueError(f"Action spec slice {name!r} has invalid range [{start}, {end}).")
+        shape = item.get("shape")
+        if shape is None:
+            shape = [end - start]
+        else:
+            shape = [int(dim) for dim in shape]
+        normalized_slices.append({"name": name, "start": start, "end": end, "shape": shape})
+    if not normalized_slices:
+        return _default_action_spec(action_dim)
+    return {"dim": spec_dim, "slices": normalized_slices}
+
+
+def _action_group_slices(action_spec: Mapping[str, Any] | None, action_dim: int) -> list[tuple[str, slice]]:
+    spec = _normalize_action_spec(action_spec, action_dim)
+    if spec is None:
+        return []
+    groups: list[tuple[str, slice]] = []
+    for item in spec["slices"]:
+        name = str(item["name"])
+        log_name = _ACTION_GROUP_LOG_NAMES.get(name, f"actor_ref_error_{name}")
+        groups.append((log_name, slice(int(item["start"]), int(item["end"]))))
+    return groups
+
+
+def action_group_errors(diff: torch.Tensor, action_spec: Mapping[str, Any] | None = None) -> Dict[str, float]:
+    groups = _action_group_slices(action_spec, int(diff.shape[-1]))
+    return {key: float(diff[..., value].mean().detach().cpu()) for key, value in groups}
 
 
 def parse_hidden_dims(value: str) -> tuple[int, ...]:
@@ -482,6 +539,7 @@ def build_training_config_payload(
             "actor_obs_dim": prepared.actor_obs_dim,
             "critic_obs_dim": prepared.critic_obs_dim,
             "action_dim": prepared.action_dim,
+            "action_spec": prepared.action_spec,
         },
         "replay_metadata": replay.metadata,
         "wandb": {

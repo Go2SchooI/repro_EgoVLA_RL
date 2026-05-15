@@ -1,6 +1,7 @@
 import argparse
 import numpy as np
 import pytest
+import torch
 
 from rl_posttrain.normalizer import AffineNormalizer
 from rl_posttrain.replay_buffer import OfflineReplayBuffer
@@ -9,6 +10,7 @@ from rl_posttrain.td3bc_ref import (
     PreparedReplay,
     TD3BCConfig,
     TD3BCTrainer,
+    action_group_errors,
     build_training_config_payload,
     load_actor_policy,
     resolve_actor_checkpoint_path,
@@ -61,6 +63,22 @@ def test_alpha_zero_actor_loss_is_pure_bc():
     assert logs["lambda_q"] == 0.0
     assert abs(logs["actor_loss"] - logs["bc_loss"]) < 1.0e-6
     assert logs["mean_abs_actor_minus_ref_norm"] >= 0.0
+
+
+def test_action_group_errors_use_action_spec_metadata():
+    diff = torch.tensor([[1.0, 2.0, 10.0, 14.0]], dtype=torch.float32)
+    action_spec = {
+        "dim": 4,
+        "slices": [
+            {"name": "left_ee_pose", "start": 0, "end": 2, "shape": [2]},
+            {"name": "right_qpos", "start": 2, "end": 4, "shape": [2]},
+        ],
+    }
+
+    logs = action_group_errors(diff, action_spec)
+
+    assert logs["actor_ref_error_left_ee"] == pytest.approx(1.5)
+    assert logs["actor_ref_error_right_qpos"] == pytest.approx(12.0)
 
 
 def test_prepared_replay_rejects_missing_action_normalizer():
@@ -160,6 +178,33 @@ def test_h_proj_changes_processed_dims_and_roundtrips_checkpoint(tmp_path):
     assert bundle["h_summary"].requested_mode == "h_proj"
     assert bundle["h_summary"].out_dim == 4
     assert bundle["actor"].processed_obs_dim == prepared.actor_obs_dim - 2 + 4
+
+
+def test_td3bc_checkpoint_preserves_action_spec_metadata(tmp_path):
+    replay = _synthetic_replay()
+    replay.metadata["action_spec"] = {
+        "dim": 3,
+        "slices": [
+            {"name": "left_ee_pose", "start": 0, "end": 1, "shape": [1]},
+            {"name": "right_ee_pose", "start": 1, "end": 2, "shape": [1]},
+            {"name": "left_qpos", "start": 2, "end": 3, "shape": [1]},
+        ],
+    }
+    cfg = TD3BCConfig(
+        actor_hidden_dims=(16,),
+        critic_hidden_dims=(16,),
+        batch_size=8,
+        policy_delay=1,
+        h_summary=HSummaryConfig(mode="h_proj", h_dim=2, out_dim=4),
+    )
+    prepared = PreparedReplay(replay, cfg)
+    trainer = TD3BCTrainer(prepared, cfg, device="cpu", seed=0)
+
+    checkpoint_path = trainer.save(tmp_path / "actor_with_action_spec.pt")
+    bundle = load_actor_policy(checkpoint_path, device="cpu")
+
+    assert bundle["action_spec"]["dim"] == 3
+    assert bundle["checkpoint"]["action_spec"]["slices"][0]["name"] == "left_ee_pose"
 
 
 def test_h_proj_alias_preserves_requested_mode():

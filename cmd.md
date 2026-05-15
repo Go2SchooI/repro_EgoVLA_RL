@@ -163,3 +163,13 @@ python -m rl_posttrain.paired_eval \
   --num_trials 3 \
   --skip_identity \
   --output_root playground_eval/paired_eval/${TAG}_multi_scene_multi_actor
+
+
+
+python -m rl_posttrain.online_td3bc   --config rl_posttrain/configs/online_td3bc_v1.yaml   --output_root playground_eval/online_td3bc/h_proj128_alpha0001_online_v1_ckpt3000_bc0   --wandb_mode online
+
+
+python -m rl_posttrain.online_td3bc   --config rl_posttrain/configs/online_td3bc_h_proj128_alpha0_init.yaml   --wandb_mode online
+
+
+python -m rl_posttrain.online_td3bc   --config rl_posttrain/configs/online_td3bc_v1.yaml   --output_root playground_eval/online_td3bc/h_proj128_alpha0001_online_v1   --resume playground_eval/online_td3bc/h_proj128_alpha0001_online_v1/checkpoints/latest_online.pt   --allow_reuse_online_replay   --strict_resume_manifest_match   --wandb_mode online

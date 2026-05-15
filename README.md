@@ -330,6 +330,51 @@ python -m rl_posttrain.td3bc_ref \
   --td3bc_alpha 0.1 --td3bc_bc_weight 1.0
 ```
 
+### Online TD3+BC v1
+
+Online fine-tuning is a separate entrypoint and keeps the offline trainer/eval defaults off. It warm-starts from `h_proj128_alpha0001`, freezes EgoVLA, collects `online_actor` replay only on room1/room2 training scenes, and evaluates room3 only through paired eval.
+
+```bash
+conda activate env_isaaclab
+python -m rl_posttrain.online_td3bc \
+  --config rl_posttrain/configs/online_td3bc_v1.yaml
+```
+
+Rollout-only collector smoke test:
+
+```bash
+conda activate env_isaaclab
+python -m rl_posttrain.online_td3bc \
+  --config rl_posttrain/configs/online_td3bc_v1.yaml \
+  --output_root playground_eval/online_td3bc/smoke_rollout \
+  --total_online_episodes 1 \
+  --rollout_only \
+  --no_eval \
+  --no_wandb
+```
+
+Critic-only smoke test:
+
+```bash
+conda activate env_isaaclab
+python -m rl_posttrain.online_td3bc \
+  --config rl_posttrain/configs/online_td3bc_v1.yaml \
+  --output_root playground_eval/online_td3bc/smoke_critic_only \
+  --total_online_episodes 31 \
+  --min_online_transitions_for_training 1 \
+  --no_eval \
+  --no_wandb
+```
+
+Resume from a full online checkpoint:
+
+```bash
+conda activate env_isaaclab
+python -m rl_posttrain.online_td3bc \
+  --config rl_posttrain/configs/online_td3bc_v1.yaml \
+  --resume playground_eval/online_td3bc/h_proj128_alpha0001_online_v1/checkpoints/latest_online.pt
+```
+
 ### Note:
 The original benchmark/eval scripts may still depend on local IsaacLab, checkpoint, and asset paths. The RL posttrain wrappers above have been smoke-tested on Push-Box and Insert-Cans, but new machines or tasks may still need path/environment adjustments.
 

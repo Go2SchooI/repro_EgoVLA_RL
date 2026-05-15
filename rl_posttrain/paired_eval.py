@@ -11,6 +11,7 @@ from typing import Dict, List
 
 
 RESULT_RE = re.compile(r"Result:\s*(True|False)")
+EVAL_KV_RE = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>[^\s]+)")
 
 
 def _safe_label(value: str) -> str:
@@ -64,16 +65,46 @@ def _resolve_actor_checkpoint_path(path: str | Path) -> Path:
 
 
 def _parse_results(path: Path) -> List[bool]:
+    return [bool(item["success"]) for item in _parse_result_records(path)]
+
+
+def _parse_result_records(path: Path) -> List[Dict[str, object]]:
     if not path.exists():
         raise FileNotFoundError(f"Missing eval result file: {path}")
-    results: List[bool] = []
+    records: List[Dict[str, object]] = []
     for line in path.read_text().splitlines():
         match = RESULT_RE.search(line)
         if match:
-            results.append(match.group(1) == "True")
-    if not results:
+            records.append({"success": match.group(1) == "True"})
+            continue
+        if line.startswith("eval_ablation:") and records:
+            metrics: Dict[str, object] = {}
+            for kv in EVAL_KV_RE.finditer(line):
+                key = kv.group("key")
+                raw = kv.group("value")
+                try:
+                    metrics[key] = float(raw)
+                except ValueError:
+                    metrics[key] = raw
+            records[-1].update(metrics)
+    if not records:
         raise ValueError(f"No 'Result: True/False' lines found in {path}")
-    return results
+    return records
+
+
+def _metric_means(records: List[Dict[str, object]]) -> Dict[str, float]:
+    metric_keys = (
+        "rl_actor_mean_abs_actor_minus_ref_norm",
+        "rl_actor_max_abs_actor_minus_ref_norm",
+        "episode_length",
+        "rl_actor_num_clipped_dims",
+    )
+    means: Dict[str, float] = {}
+    for key in metric_keys:
+        values = [float(item[key]) for item in records if isinstance(item.get(key), (int, float))]
+        if values:
+            means[key] = sum(values) / len(values)
+    return means
 
 
 def _run_eval(
@@ -113,7 +144,8 @@ def _run_eval(
     result_path.unlink(missing_ok=True)
     print(f"[paired-eval] running mode={mode} result_path={result_path}", flush=True)
     subprocess.run(["./run_local_eval.sh"], env=env, check=True)
-    results = _parse_results(result_path)
+    records = _parse_result_records(result_path)
+    results = [bool(item["success"]) for item in records]
     return {
         "mode": mode,
         "actor_checkpoint": None if actor_checkpoint is None else str(actor_checkpoint),
@@ -124,6 +156,8 @@ def _run_eval(
         "result_path": str(result_path),
         "results": results,
         "success_rate": sum(results) / len(results),
+        "records": records,
+        "metric_means": _metric_means(records),
     }
 
 
@@ -188,6 +222,7 @@ def _aggregate_scene_summaries(scene_summaries: List[Dict[str, object]]) -> Dict
     first_summary = scene_summaries[0]["summary"]
     identity_results: List[bool] | None = [] if "identity" in first_summary["runs"] else None
     actor_results: Dict[str, List[bool]] = {name: [] for name in _actor_runs(first_summary).keys()}
+    actor_records: Dict[str, List[Dict[str, object]]] = {name: [] for name in _actor_runs(first_summary).keys()}
     scenes = []
 
     for item in scene_summaries:
@@ -199,6 +234,7 @@ def _aggregate_scene_summaries(scene_summaries: List[Dict[str, object]]) -> Dict
             identity_results.extend(summary["runs"]["identity"]["results"])
         for actor_name, actor_run in _actor_runs(summary).items():
             actor_results.setdefault(actor_name, []).extend(actor_run["results"])
+            actor_records.setdefault(actor_name, []).extend(actor_run.get("records", []))
         scenes.append(
             {
                 "scene": scene,
@@ -206,6 +242,10 @@ def _aggregate_scene_summaries(scene_summaries: List[Dict[str, object]]) -> Dict
                 "baseline_success_rate": summary["runs"]["baseline"]["success_rate"],
                 "actor_success_rates": {
                     actor_name: actor_run["success_rate"]
+                    for actor_name, actor_run in _actor_runs(summary).items()
+                },
+                "actor_metric_means": {
+                    actor_name: actor_run.get("metric_means", {})
                     for actor_name, actor_run in _actor_runs(summary).items()
                 },
                 "comparisons": _actor_comparisons(summary),
@@ -216,6 +256,7 @@ def _aggregate_scene_summaries(scene_summaries: List[Dict[str, object]]) -> Dict
         actor_name: {
             "results": results,
             "success_rate": sum(results) / len(results),
+            "metric_means": _metric_means(actor_records.get(actor_name, [])),
         }
         for actor_name, results in actor_results.items()
     }
@@ -264,6 +305,10 @@ def _compare(baseline: List[bool], identity: List[bool] | None, actor: List[bool
         ),
         "baseline_success_actor_fail": sum(b and not a for b, a in zip(baseline, actor)),
         "baseline_fail_actor_success": sum((not b) and a for b, a in zip(baseline, actor)),
+        "regress": sum(b and not a for b, a in zip(baseline, actor)),
+        "recover": sum((not b) and a for b, a in zip(baseline, actor)),
+        "net": sum((not b) and a for b, a in zip(baseline, actor))
+        - sum(b and not a for b, a in zip(baseline, actor)),
     }
 
 
