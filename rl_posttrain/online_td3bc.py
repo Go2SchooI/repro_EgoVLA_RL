@@ -23,7 +23,12 @@ from rl_posttrain.actors import DeterministicActor
 from rl_posttrain.critics import DoubleQCritic
 from rl_posttrain.h_summary import HSummaryConfig, module_grad_norm, module_num_parameters, module_param_norm
 from rl_posttrain.normalizer import AffineNormalizer
-from rl_posttrain.paired_eval import _safe_label as paired_safe_label
+from rl_posttrain.paired_eval import (
+    _aggregate_scene_summaries as paired_aggregate_scene_summaries,
+    _compare as paired_compare,
+    _run_eval as paired_run_eval,
+    _safe_label as paired_safe_label,
+)
 from rl_posttrain.replay_buffer import FAST_FIELDS, OfflineReplayBuffer
 from rl_posttrain.td3bc_ref import (
     TD3BCConfig,
@@ -104,6 +109,7 @@ DEFAULT_ONLINE_CONFIG: Dict[str, Any] = {
         "include_baseline": True,
         "include_identity": True,
         "include_offline_init": True,
+        "cache_static": True,
         "report_seen_unseen_split": True,
         "no_save_video": True,
     },
@@ -154,6 +160,23 @@ def _load_yaml(path: str | Path) -> Dict[str, Any]:
     return payload
 
 
+def _safe_name_token(value: str | Path) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_")
+
+
+def _float_name_token(prefix: str, value: float | int | str | None) -> str:
+    if value is None:
+        return f"{prefix}none"
+    numeric = float(value)
+    if numeric == 0.0:
+        return f"{prefix}0"
+    text = f"{numeric:.8g}"
+    if "e" in text or "E" in text:
+        text = f"{numeric:.8f}".rstrip("0").rstrip(".")
+    text = text.replace("-", "m").replace(".", "")
+    return f"{prefix}{text}"
+
+
 def _resolve_path(path: str | Path) -> Path:
     return Path(path).expanduser()
 
@@ -196,6 +219,85 @@ def resolve_init_checkpoint(path_or_alias: str | Path) -> Path:
     value = str(path_or_alias)
     value = CHECKPOINT_ALIASES.get(value, value)
     return resolve_actor_checkpoint_path(value)
+
+
+def _init_checkpoint_label(path_or_alias: str | Path) -> str:
+    value = str(path_or_alias)
+    if value in CHECKPOINT_ALIASES:
+        return _safe_name_token(value)
+    path = Path(value)
+    name = path.name or path.parent.name
+    for prefix in ("open_laptop_hsummary_", "open_laptop_", "checkpoint_"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+    return _safe_name_token(name)
+
+
+def _model_path_label(path: str | Path) -> str:
+    name = Path(str(path)).expanduser().name
+    if name.startswith("checkpoint-"):
+        name = "ckpt" + name[len("checkpoint-") :]
+    return _safe_name_token(name)
+
+
+def _derive_run_name(cfg: Mapping[str, Any], suffix: str | None = None) -> str:
+    online_cfg = cfg["online"]
+    td3bc_cfg = cfg["td3bc"]
+    parts = [
+        _init_checkpoint_label(online_cfg["init_checkpoint"]),
+        "online_v1",
+        _model_path_label(online_cfg["model_path"]),
+        _float_name_token("td3alpha", float(td3bc_cfg.get("alpha", 0.001))),
+        _float_name_token("bc", float(td3bc_cfg.get("bc_weight", 1.0))),
+    ]
+    if suffix:
+        parts.append(_safe_name_token(suffix))
+    return "_".join(part for part in parts if part)
+
+
+def _should_auto_name(args: argparse.Namespace) -> bool:
+    explicit = bool(getattr(args, "auto_name", False))
+    command_changed_name_inputs = any(
+        getattr(args, key, None) is not None
+        for key in (
+            "init_checkpoint",
+            "model_path",
+            "td3bc_alpha",
+            "bc_weight",
+            "noise_std",
+            "noise_clip",
+            "critic_only_base_ratio",
+            "critic_only_online_ratio",
+            "joint_base_ratio",
+            "joint_online_ratio",
+            "name_suffix",
+            "output_root_base",
+            "wandb_run_name",
+        )
+    )
+    return explicit or command_changed_name_inputs
+
+
+def _apply_derived_naming(cfg: Dict[str, Any], args: argparse.Namespace) -> None:
+    if not _should_auto_name(args):
+        return
+    run_name = args.wandb_run_name or _derive_run_name(cfg, args.name_suffix)
+    if not args.output_root:
+        output_root_base = args.output_root_base or "playground_eval/online_td3bc"
+        cfg["online"]["output_root"] = str(_resolve_path(output_root_base) / run_name)
+    cfg["wandb"]["run_name"] = run_name
+    if args.wandb_group:
+        cfg["wandb"]["group"] = args.wandb_group
+    tags = list(cfg["wandb"].get("tags") or [])
+    for tag in (
+        _init_checkpoint_label(cfg["online"]["init_checkpoint"]),
+        _model_path_label(cfg["online"]["model_path"]),
+        _float_name_token("td3alpha", float(cfg["td3bc"].get("alpha", 0.001))),
+        _float_name_token("bc", float(cfg["td3bc"].get("bc_weight", 1.0))),
+    ):
+        if tag and tag not in tags:
+            tags.append(tag)
+    cfg["wandb"]["tags"] = tags
 
 
 def scene_to_room_table(scene: str) -> tuple[int, int]:
@@ -1217,6 +1319,164 @@ def summarize_paired_eval(
     return metrics
 
 
+def _static_eval_cache_descriptor(
+    cfg: Dict[str, Any],
+    init_checkpoint: Path,
+    scenes: Sequence[str],
+) -> Dict[str, Any]:
+    eval_cfg = cfg["eval"]
+    static_actor_checkpoint = init_checkpoint.parent if init_checkpoint.name == "actor.pt" else init_checkpoint
+    return {
+        "format": "online_td3bc_static_eval_cache_descriptor_v1",
+        "task": str(cfg["online"]["task"]),
+        "model_path": _canonical_model_path(cfg["online"]["model_path"]),
+        "scenes": list(scenes),
+        "num_episodes": int(eval_cfg.get("num_episodes", 1)),
+        "num_trials": int(eval_cfg.get("num_trials", 1)),
+        "include_identity": bool(eval_cfg.get("include_identity", True)),
+        "include_offline_init": bool(eval_cfg.get("include_offline_init", True)),
+        "offline_init_checkpoint": str(_resolve_path(static_actor_checkpoint)),
+    }
+
+
+def _static_eval_cache_path(output_root: Path, descriptor: Mapping[str, Any]) -> Path:
+    fingerprint = _stable_fingerprint(descriptor)[:16]
+    return output_root / "eval" / "static_cache" / f"{fingerprint}.json"
+
+
+def _write_static_eval_cache(summary_path: Path, cache_path: Path, descriptor: Mapping[str, Any]) -> None:
+    summary = json.loads(summary_path.read_text())
+    scene_summaries = []
+    for item in summary.get("scenes", []):
+        scene_summary_path = Path(item["summary_path"])
+        scene_summaries.append(
+            {
+                "summary_path": str(scene_summary_path),
+                "summary": json.loads(scene_summary_path.read_text()),
+            }
+        )
+    payload = {
+        "format": "online_td3bc_static_eval_cache_v1",
+        "descriptor": dict(descriptor),
+        "source_summary_path": str(summary_path),
+        "scene_summaries": scene_summaries,
+    }
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2))
+    tmp_path.replace(cache_path)
+
+
+def _load_static_eval_cache(cache_path: Path, descriptor: Mapping[str, Any]) -> Dict[str, Any] | None:
+    if not cache_path.exists():
+        return None
+    payload = json.loads(cache_path.read_text())
+    if payload.get("format") != "online_td3bc_static_eval_cache_v1":
+        raise ValueError(f"Unexpected static eval cache format in {cache_path}: {payload.get('format')!r}")
+    if _json_safe(payload.get("descriptor")) != _json_safe(dict(descriptor)):
+        raise ValueError(f"Static eval cache descriptor mismatch: {cache_path}")
+    return payload
+
+
+def _paired_eval_args_for_online(cfg: Dict[str, Any]) -> argparse.Namespace:
+    eval_cfg = cfg["eval"]
+    return argparse.Namespace(
+        actor_checkpoint=[],
+        task=str(cfg["online"]["task"]),
+        model_path=str(_resolve_path(cfg["online"]["model_path"])),
+        room_idx=None,
+        table_idx=None,
+        scene=None,
+        max_eval_steps=None,
+        num_episodes=int(eval_cfg.get("num_episodes", 1)),
+        num_trials=int(eval_cfg.get("num_trials", 1)),
+        output_root=None,
+        no_save_video=bool(eval_cfg.get("no_save_video", True)),
+        skip_identity=not bool(eval_cfg.get("include_identity", True)),
+    )
+
+
+def _actor_runs_from_scene_summary(scene_summary: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+    runs = scene_summary["runs"]
+    if "actors" in runs:
+        return copy.deepcopy(dict(runs["actors"]))
+    if "actor" in runs:
+        return {"actor": copy.deepcopy(runs["actor"])}
+    return {}
+
+
+def _run_paired_eval_with_static_cache(
+    cfg: Dict[str, Any],
+    output: Path,
+    current_actor_checkpoint: Path,
+    cache_payload: Mapping[str, Any],
+) -> Path:
+    current_actor_name = paired_safe_label(current_actor_checkpoint.stem)
+    scene_summaries = []
+    base_args = _paired_eval_args_for_online(cfg)
+    for cached_item in cache_payload.get("scene_summaries", []):
+        cached_summary = copy.deepcopy(cached_item["summary"])
+        scene = cached_summary["scene"]
+        room_idx = int(scene["room_idx"])
+        table_idx = int(scene["table_idx"])
+        scene_args = argparse.Namespace(**vars(base_args))
+        scene_args.room_idx = room_idx
+        scene_args.table_idx = table_idx
+        scene_root = output / f"room{room_idx}_table{table_idx}"
+        scene_root.mkdir(parents=True, exist_ok=True)
+        current_actor_run = paired_run_eval(
+            "actor",
+            scene_args,
+            scene_root,
+            actor_checkpoint=current_actor_checkpoint,
+            run_name=f"actor_{current_actor_name}",
+        )
+
+        cached_runs = cached_summary["runs"]
+        runs: Dict[str, Any] = {"baseline": copy.deepcopy(cached_runs["baseline"])}
+        if "identity" in cached_runs:
+            runs["identity"] = copy.deepcopy(cached_runs["identity"])
+
+        actor_runs = _actor_runs_from_scene_summary(cached_summary)
+        actor_runs = {
+            name: run
+            for name, run in actor_runs.items()
+            if name != current_actor_name
+            and paired_safe_label(Path(str(run.get("actor_checkpoint", ""))).stem) != current_actor_name
+        }
+        actor_runs[current_actor_name] = current_actor_run
+        runs["actors"] = actor_runs
+
+        identity_results = None if "identity" not in runs else list(runs["identity"]["results"])
+        comparisons = {
+            actor_name: paired_compare(
+                list(runs["baseline"]["results"]),
+                identity_results,
+                list(actor_run["results"]),
+            )
+            for actor_name, actor_run in actor_runs.items()
+        }
+        scene_summary = {
+            "runs": runs,
+            "comparisons": comparisons,
+            "scene": scene,
+            "model_path": str(_resolve_path(cfg["online"]["model_path"])),
+        }
+        scene_summary_path = scene_root / "paired_summary.json"
+        scene_summary_path.write_text(json.dumps(scene_summary, indent=2))
+        print(f"[online-td3bc][eval-cache] scene_summary={scene_summary_path}", flush=True)
+        scene_summaries.append({"summary_path": str(scene_summary_path), "summary": scene_summary})
+
+    summary = paired_aggregate_scene_summaries(scene_summaries)
+    summary["static_eval_cache"] = {
+        "reused_static": True,
+        "source_summary_path": cache_payload.get("source_summary_path"),
+    }
+    summary_path = output / "paired_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    return summary_path
+
+
 def run_paired_eval(
     cfg: Dict[str, Any],
     output_root: Path,
@@ -1227,6 +1487,33 @@ def run_paired_eval(
     eval_cfg = cfg["eval"]
     scenes = list(cfg["online"]["train_scenes"]) + list(cfg["online"]["unseen_eval_scenes"])
     output = output_root / "eval" / f"episode_{episode_idx:04d}"
+    cache_descriptor = _static_eval_cache_descriptor(cfg, init_checkpoint, scenes)
+    cache_path = _static_eval_cache_path(output_root, cache_descriptor)
+    cache_payload = (
+        _load_static_eval_cache(cache_path, cache_descriptor)
+        if bool(eval_cfg.get("cache_static", True))
+        else None
+    )
+    if cache_payload is not None:
+        print(
+            f"[online-td3bc][eval-cache] reusing static baseline/offline eval cache={cache_path}",
+            flush=True,
+        )
+        summary_path = _run_paired_eval_with_static_cache(
+            cfg,
+            output,
+            current_actor_checkpoint,
+            cache_payload,
+        )
+        metrics = summarize_paired_eval(
+            summary_path,
+            current_actor_checkpoint,
+            cfg["online"]["train_scenes"],
+            cfg["online"]["unseen_eval_scenes"],
+        )
+        metrics["eval/static_cache_used"] = 1.0
+        return summary_path, metrics
+
     cmd = [
         sys.executable,
         "-m",
@@ -1260,12 +1547,16 @@ def run_paired_eval(
     print(f"[online-td3bc][eval] running paired eval output={output}", flush=True)
     subprocess.run(cmd, check=True)
     summary_path = output / "paired_summary.json"
+    if bool(eval_cfg.get("cache_static", True)):
+        _write_static_eval_cache(summary_path, cache_path, cache_descriptor)
+        print(f"[online-td3bc][eval-cache] wrote static eval cache={cache_path}", flush=True)
     metrics = summarize_paired_eval(
         summary_path,
         current_actor_checkpoint,
         cfg["online"]["train_scenes"],
         cfg["online"]["unseen_eval_scenes"],
     )
+    metrics["eval/static_cache_used"] = 0.0
     return summary_path, metrics
 
 
@@ -1314,11 +1605,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Online off-policy TD3+BC fine-tuning for EgoVLA.")
     parser.add_argument("--config", default=None, help="YAML config. Defaults to online_td3bc_v1 in code.")
     parser.add_argument("--output_root", default=None)
+    parser.add_argument("--output_root_base", default=None, help="Base directory used when auto-generating output_root.")
+    parser.add_argument("--auto_name", action="store_true", help="Derive output_root and W&B run_name from command overrides.")
+    parser.add_argument("--name_suffix", default=None, help="Optional suffix appended to the derived run name.")
     parser.add_argument("--init_checkpoint", default=None)
+    parser.add_argument("--model_path", default=None)
     parser.add_argument("--base_replay", default=None)
     parser.add_argument("--total_online_episodes", type=int, default=None)
     parser.add_argument("--critic_only_episodes", type=int, default=None)
     parser.add_argument("--min_online_transitions_for_training", type=int, default=None)
+    parser.add_argument("--td3bc_alpha", "--alpha", dest="td3bc_alpha", type=float, default=None)
+    parser.add_argument("--bc_weight", type=float, default=None)
+    parser.add_argument("--noise_std", type=float, default=None)
+    parser.add_argument("--noise_clip", type=float, default=None)
+    parser.add_argument("--critic_only_base_ratio", type=float, default=None)
+    parser.add_argument("--critic_only_online_ratio", type=float, default=None)
+    parser.add_argument("--joint_base_ratio", type=float, default=None)
+    parser.add_argument("--joint_online_ratio", type=float, default=None)
     parser.add_argument("--max_eval_steps", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -1337,6 +1640,9 @@ def main() -> None:
         help="Fail resume when checkpoint replay_manifest differs from output_root/online_replay.",
     )
     parser.add_argument("--wandb_mode", default=None, choices=("online", "offline", "disabled"))
+    parser.add_argument("--wandb_project", default=None)
+    parser.add_argument("--wandb_group", default=None)
+    parser.add_argument("--wandb_run_name", default=None)
     parser.add_argument("--no_wandb", action="store_true")
     args = parser.parse_args()
 
@@ -1347,6 +1653,8 @@ def main() -> None:
         cfg["online"]["output_root"] = args.output_root
     if args.init_checkpoint:
         cfg["online"]["init_checkpoint"] = args.init_checkpoint
+    if args.model_path:
+        cfg["online"]["model_path"] = args.model_path
     if args.base_replay:
         cfg["online"]["base_replay"] = args.base_replay
     if args.total_online_episodes is not None:
@@ -1355,6 +1663,22 @@ def main() -> None:
         cfg["online"]["critic_only_episodes"] = int(args.critic_only_episodes)
     if args.min_online_transitions_for_training is not None:
         cfg["replay_mix"]["min_online_transitions_for_training"] = int(args.min_online_transitions_for_training)
+    if args.td3bc_alpha is not None:
+        cfg["td3bc"]["alpha"] = float(args.td3bc_alpha)
+    if args.bc_weight is not None:
+        cfg["td3bc"]["bc_weight"] = float(args.bc_weight)
+    if args.noise_std is not None:
+        cfg["exploration"]["noise_std"] = float(args.noise_std)
+    if args.noise_clip is not None:
+        cfg["exploration"]["noise_clip"] = float(args.noise_clip)
+    if args.critic_only_base_ratio is not None:
+        cfg["replay_mix"]["critic_only"]["base_ratio"] = float(args.critic_only_base_ratio)
+    if args.critic_only_online_ratio is not None:
+        cfg["replay_mix"]["critic_only"]["online_ratio"] = float(args.critic_only_online_ratio)
+    if args.joint_base_ratio is not None:
+        cfg["replay_mix"]["joint"]["base_ratio"] = float(args.joint_base_ratio)
+    if args.joint_online_ratio is not None:
+        cfg["replay_mix"]["joint"]["online_ratio"] = float(args.joint_online_ratio)
     if args.max_eval_steps is not None:
         cfg["online"]["max_eval_steps"] = int(args.max_eval_steps)
     if args.device:
@@ -1367,8 +1691,15 @@ def main() -> None:
         cfg["wandb"]["enabled"] = False
     if args.wandb_mode:
         cfg["wandb"]["mode"] = args.wandb_mode
+    if args.wandb_project:
+        cfg["wandb"]["project"] = args.wandb_project
+    if args.wandb_group:
+        cfg["wandb"]["group"] = args.wandb_group
+    if args.wandb_run_name:
+        cfg["wandb"]["run_name"] = args.wandb_run_name
     if args.strict_resume_manifest_match:
         cfg["replay_mix"]["strict_resume_manifest_match"] = True
+    _apply_derived_naming(cfg, args)
 
     _validate_config(cfg)
     output_root = _resolve_path(cfg["online"]["output_root"])

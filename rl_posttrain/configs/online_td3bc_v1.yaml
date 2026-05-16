@@ -14,7 +14,7 @@ online:
   unseen_eval_scenes:
     - room3_table1
     - room3_table2
-  total_online_episodes: 300
+  total_online_episodes: 250
   critic_only_episodes: 30
   scene_sampling: balanced
   max_eval_steps: 0
@@ -72,11 +72,12 @@ gates:
 
 eval:
   every_episodes: 50
-  num_episodes: 4
+  num_episodes: 6
   num_trials: 1
   include_baseline: true
   include_identity: false
   include_offline_init: true
+  cache_static: true
   report_seen_unseen_split: true
   no_save_video: true
 
