@@ -1,0 +1,42 @@
+# Full EPIC seen-val config: fixed 2048 episodes, all expanded windows (no 3000-window cap).
+model_config: vitra_paligemma
+dataloader_config: vitra_epic100_ego4d_added_100_epic_val
+split: val
+split_manifest: <SPLIT_MANIFEST>
+experiment:
+  type: epic100_ego4d_added_epoch2_full2048_epic_only
+  scope: EPIC100 + ego100 checkpoints; validation is EPIC seen-val fixed 2048 episodes expanded to all windows.
+predictor:
+  type: checkpoint
+  checkpoint: null
+  ddim_steps: 10
+  cfg_scale: 5.0
+  vlm_path: <VLM_PATH>
+device: cuda
+dtype: bf16
+seed: 42
+batch_size: 8
+num_workers: 0
+num_samples: 1
+max_windows: 0
+top_percents: [1, 2, 3]
+top_k: 20
+write_sample_results: true
+log_every: 20
+dump_predictions: false
+teacher_forced_denoise:
+  enabled: false
+visualization:
+  enabled: false
+  output_dir: null
+  data_roots: [
+  data_infra_root: null
+  python: null
+  samples: null
+  overlay_modes: [skeleton, mesh_skel]
+  no_launch_web: true
+  port: 7895
+  wrapper_port: 8895
+output_root: <OUTPUT_ROOT>
+run_name: epic100_ego4d_added_100_epic_full2048_val
+log_level: INFO

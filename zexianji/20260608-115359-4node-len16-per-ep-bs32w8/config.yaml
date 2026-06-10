@@ -1,0 +1,45 @@
+host: <host-redacted>
+port: 1023
+created: 2026-06-08 11:53:59 Asia/Shanghai
+purpose: SG DLC 4-node LEN16 training on per-episode-file data root, per-GPU bs=32, workers=8, followed by EPIC-only validation
+entry_script: <DLC_ENTRY_SCRIPT>
+upstream_entry: <DLC_ENTRY_SCRIPT>
+repo_root: <REPO_ROOT>
+git_branch: <git-branch>
+git_head: 6895add
+handoff_root: <HANDOFF_ROOT>
+formal_output_root: <FORMAL_OUTPUT_ROOT>
+data_root: <DATA_ROOT>
+distributed:
+  nnodes_default: 4
+  nproc_per_node: 8
+  expected_total_gpus: 32
+training:
+  dataloader: vitra_epic100_ego4d_len16_per_ep
+  dataloader_yaml: <DATALOADER_YAML>
+  manifest: <MANIFEST>
+  stats_path: <STATS_PATH>
+  model_path: <MODEL_PATH>
+  batch_size_per_gpu: 32
+  total_batch_size: 1024
+  max_epochs: 2
+  save_steps: 1000000000
+  save_epoch_checkpoints: true
+  dataset_num_workers: 8
+validation:
+  run_val: 1
+  config: <VALIDATION_CONFIG>
+  dataloader_yaml: <DATALOADER_YAML>
+  max_windows: 3000
+  num_samples: 1
+  ddim_steps: 10
+  cfg_scale: 5.0
+io:
+  parquet_read_mode: full
+  parquet_window_read: 0
+outputs:
+  run_base: <RUN_BASE>
+  logs: <LOG_DIR>
+  cache: <CACHE_DIR>
+  sandbox_env: <SANDBOX_ENV_RECORD>
+  sandbox_artifacts_manifest: <SANDBOX_ARTIFACT_MANIFEST>

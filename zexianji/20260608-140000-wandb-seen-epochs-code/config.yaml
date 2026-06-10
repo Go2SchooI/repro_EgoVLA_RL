@@ -1,0 +1,19 @@
+host: <host-redacted>
+port: 1023
+repo: <REPO_ROOT>
+changed_files:
+  - openwam/train/vla/train_loop.py
+  - openwam/train/vla/trainer.py
+  - openwam/train/vla/wandb_protocol.py
+metrics_added:
+  - train/effective_batch_size
+  - train/samples_seen
+  - train/train_windows
+  - train/seen_epochs
+  - train/loss_vs_seen_epochs
+formula:
+  effective_batch_size: per_gpu_batch_size * distributed_world_size * gradient_accumulation_steps
+  samples_seen: global_step * effective_batch_size
+  seen_epochs: samples_seen / len(train_dataset)
+validation:
+  command: <PYTHON_BIN> -m py_compile openwam/train/vla/train_loop.py openwam/train/vla/trainer.py openwam/train/vla/wandb_protocol.py

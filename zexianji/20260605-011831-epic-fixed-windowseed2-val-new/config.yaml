@@ -1,0 +1,24 @@
+host: <host-redacted>
+port: 1024
+created: 2026-06-05 01:18:31 Asia/Shanghai
+purpose: Revalidate 3-node bs4x24 H200 and 4-node bs2x32 H200 checkpoints on same 2048 EPIC seen-val episodes with the same new fixed 3000-window sample as the old-machine script.
+repo_root: <REPO_ROOT>
+python_bin: <PYTHON_BIN>
+window_sampling:
+  fixed_episode_set: <FIXED_EPISODE_SET>
+  dataset_size: 69606
+  num_windows: 3000
+  window_seed: 20260605
+  indices_file: <WINDOW_INDICES_JSON>
+validation:
+  read_mode: full
+  batch_size_per_gpu: 8
+  validation_seed: 42
+  num_samples: 1
+  ddim_steps: 10
+  cfg_scale: 5.0
+checkpoints:
+- label: 3-node-bs4x24-h200
+  path: <CHECKPOINT_PATH>
+- label: 4-node-bs2x32-h200
+  path: <CHECKPOINT_PATH>

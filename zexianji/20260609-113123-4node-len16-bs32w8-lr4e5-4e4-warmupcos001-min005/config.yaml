@@ -1,0 +1,23 @@
+host: <host-redacted>
+port: 1024
+nodes: 4
+gpus_per_node: 8
+per_gpu_batch_size: 32
+effective_batch_size: 1024
+max_epochs: 2
+train_windows: 6143126
+steps_per_epoch: 6000
+total_steps: 12000
+warmup_ratio: 0.01
+warmup_steps: 120
+llm_freeze_step: 0
+backbone_lr: 4e-5
+action_model_learning_rate: 4e-4
+scheduler: warmup_cosine
+cosine_min_lr_rate: 0.05
+workers: 8
+code_patch:
+  - 
+  - 
+  - 
+  - 
