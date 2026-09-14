@@ -1,0 +1,2797 @@
+{
+  "schema_version": 1,
+  "protocol": {
+    "task": "Humanoid-Open-Laptop-v0",
+    "scenes": [
+      [
+        1,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        1
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        3,
+        1
+      ],
+      [
+        3,
+        2
+      ]
+    ],
+    "episodes_per_scene": 8,
+    "trials": 2,
+    "rollouts_per_policy": 96,
+    "main_max_steps": 0,
+    "task_seed": 8,
+    "training_seed": 0,
+    "heldout_claim": "room3 historical development/evaluation split; not untouched test",
+    "static_references_cached": true
+  },
+  "final_checkpoint_sha256": "2ab08e1f7304314f776874900ad4fed2d46cc249d8c1995f21b698a13d06e41f",
+  "milestones": {
+    "50": {
+      "groups": {
+        "all": {
+          "num_scenes": 6,
+          "policies": {
+            "baseline": {
+              "successes": 70,
+              "n": 96,
+              "success_rate": 0.7291666666666666
+            },
+            "offline": {
+              "successes": 74,
+              "n": 96,
+              "success_rate": 0.7708333333333334
+            },
+            "online": {
+              "successes": 73,
+              "n": 96,
+              "success_rate": 0.7604166666666666
+            }
+          },
+          "offline_vs_baseline": {
+            "num_pairs": 96,
+            "recover": 10,
+            "regress": 6,
+            "net": 4,
+            "success_delta_pp": 4.166666666666667
+          },
+          "online_vs_offline": {
+            "num_pairs": 96,
+            "recover": 7,
+            "regress": 8,
+            "net": -1,
+            "success_delta_pp": -1.0416666666666667
+          },
+          "online_vs_baseline": {
+            "num_pairs": 96,
+            "recover": 9,
+            "regress": 6,
+            "net": 3,
+            "success_delta_pp": 3.125
+          }
+        },
+        "room1_room2": {
+          "num_scenes": 4,
+          "policies": {
+            "baseline": {
+              "successes": 48,
+              "n": 64,
+              "success_rate": 0.75
+            },
+            "offline": {
+              "successes": 49,
+              "n": 64,
+              "success_rate": 0.765625
+            },
+            "online": {
+              "successes": 47,
+              "n": 64,
+              "success_rate": 0.734375
+            }
+          },
+          "offline_vs_baseline": {
+            "num_pairs": 64,
+            "recover": 5,
+            "regress": 4,
+            "net": 1,
+            "success_delta_pp": 1.5625
+          },
+          "online_vs_offline": {
+            "num_pairs": 64,
+            "recover": 4,
+            "regress": 6,
+            "net": -2,
+            "success_delta_pp": -3.125
+          },
+          "online_vs_baseline": {
+            "num_pairs": 64,
+            "recover": 4,
+            "regress": 5,
+            "net": -1,
+            "success_delta_pp": -1.5625
+          }
+        },
+        "room3": {
+          "num_scenes": 2,
+          "policies": {
+            "baseline": {
+              "successes": 22,
+              "n": 32,
+              "success_rate": 0.6875
+            },
+            "offline": {
+              "successes": 25,
+              "n": 32,
+              "success_rate": 0.78125
+            },
+            "online": {
+              "successes": 26,
+              "n": 32,
+              "success_rate": 0.8125
+            }
+          },
+          "offline_vs_baseline": {
+            "num_pairs": 32,
+            "recover": 5,
+            "regress": 2,
+            "net": 3,
+            "success_delta_pp": 9.375
+          },
+          "online_vs_offline": {
+            "num_pairs": 32,
+            "recover": 3,
+            "regress": 2,
+            "net": 1,
+            "success_delta_pp": 3.125
+          },
+          "online_vs_baseline": {
+            "num_pairs": 32,
+            "recover": 5,
+            "regress": 1,
+            "net": 4,
+            "success_delta_pp": 12.5
+          }
+        }
+      },
+      "scenes": [
+        {
+          "room": 1,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        {
+          "room": 1,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "online": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false,
+              true
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 1,
+          "results": {
+            "baseline": [
+              false,
+              true,
+              false,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 2,
+          "results": {
+            "baseline": [
+              false,
+              false,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              false,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ],
+            "online": [
+              false,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        }
+      ]
+    },
+    "100": {
+      "groups": {
+        "all": {
+          "policies": {
+            "baseline": {
+              "successes": 70,
+              "n": 96,
+              "success_rate": 0.7291666666666666
+            },
+            "offline": {
+              "successes": 74,
+              "n": 96,
+              "success_rate": 0.7708333333333334
+            },
+            "online": {
+              "successes": 71,
+              "n": 96,
+              "success_rate": 0.7395833333333334
+            }
+          },
+          "online_vs_offline": {
+            "recover": 7,
+            "regress": 10,
+            "net": -3
+          },
+          "online_vs_baseline": {
+            "recover": 8,
+            "regress": 7,
+            "net": 1
+          }
+        },
+        "room1_room2": {
+          "policies": {
+            "baseline": {
+              "successes": 48,
+              "n": 64,
+              "success_rate": 0.75
+            },
+            "offline": {
+              "successes": 49,
+              "n": 64,
+              "success_rate": 0.765625
+            },
+            "online": {
+              "successes": 49,
+              "n": 64,
+              "success_rate": 0.765625
+            }
+          },
+          "online_vs_offline": {
+            "recover": 5,
+            "regress": 5,
+            "net": 0
+          },
+          "online_vs_baseline": {
+            "recover": 6,
+            "regress": 5,
+            "net": 1
+          }
+        },
+        "room3": {
+          "policies": {
+            "baseline": {
+              "successes": 22,
+              "n": 32,
+              "success_rate": 0.6875
+            },
+            "offline": {
+              "successes": 25,
+              "n": 32,
+              "success_rate": 0.78125
+            },
+            "online": {
+              "successes": 22,
+              "n": 32,
+              "success_rate": 0.6875
+            }
+          },
+          "online_vs_offline": {
+            "recover": 2,
+            "regress": 5,
+            "net": -3
+          },
+          "online_vs_baseline": {
+            "recover": 2,
+            "regress": 2,
+            "net": 0
+          }
+        }
+      },
+      "scenes": [
+        {
+          "room": 1,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        {
+          "room": 1,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "online": [
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 1,
+          "results": {
+            "baseline": [
+              false,
+              true,
+              false,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 2,
+          "results": {
+            "baseline": [
+              false,
+              false,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              false,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ],
+            "online": [
+              false,
+              false,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        }
+      ]
+    },
+    "150": {
+      "groups": {
+        "all": {
+          "policies": {
+            "baseline": {
+              "successes": 70,
+              "n": 96,
+              "success_rate": 0.7291666666666666
+            },
+            "offline": {
+              "successes": 74,
+              "n": 96,
+              "success_rate": 0.7708333333333334
+            },
+            "online": {
+              "successes": 74,
+              "n": 96,
+              "success_rate": 0.7708333333333334
+            }
+          },
+          "online_vs_offline": {
+            "recover": 7,
+            "regress": 7,
+            "net": 0
+          },
+          "online_vs_baseline": {
+            "recover": 7,
+            "regress": 3,
+            "net": 4
+          }
+        },
+        "room1_room2": {
+          "policies": {
+            "baseline": {
+              "successes": 48,
+              "n": 64,
+              "success_rate": 0.75
+            },
+            "offline": {
+              "successes": 49,
+              "n": 64,
+              "success_rate": 0.765625
+            },
+            "online": {
+              "successes": 51,
+              "n": 64,
+              "success_rate": 0.796875
+            }
+          },
+          "online_vs_offline": {
+            "recover": 5,
+            "regress": 3,
+            "net": 2
+          },
+          "online_vs_baseline": {
+            "recover": 4,
+            "regress": 1,
+            "net": 3
+          }
+        },
+        "room3": {
+          "policies": {
+            "baseline": {
+              "successes": 22,
+              "n": 32,
+              "success_rate": 0.6875
+            },
+            "offline": {
+              "successes": 25,
+              "n": 32,
+              "success_rate": 0.78125
+            },
+            "online": {
+              "successes": 23,
+              "n": 32,
+              "success_rate": 0.71875
+            }
+          },
+          "online_vs_offline": {
+            "recover": 2,
+            "regress": 4,
+            "net": -2
+          },
+          "online_vs_baseline": {
+            "recover": 3,
+            "regress": 2,
+            "net": 1
+          }
+        }
+      },
+      "scenes": [
+        {
+          "room": 1,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        {
+          "room": 1,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "online": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 1,
+          "results": {
+            "baseline": [
+              false,
+              true,
+              false,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 2,
+          "results": {
+            "baseline": [
+              false,
+              false,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              false,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ],
+            "online": [
+              false,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        }
+      ]
+    },
+    "200": {
+      "groups": {
+        "all": {
+          "policies": {
+            "baseline": {
+              "successes": 70,
+              "n": 96,
+              "success_rate": 0.7291666666666666
+            },
+            "offline": {
+              "successes": 74,
+              "n": 96,
+              "success_rate": 0.7708333333333334
+            },
+            "online": {
+              "successes": 75,
+              "n": 96,
+              "success_rate": 0.78125
+            }
+          },
+          "online_vs_offline": {
+            "recover": 8,
+            "regress": 7,
+            "net": 1
+          },
+          "online_vs_baseline": {
+            "recover": 9,
+            "regress": 4,
+            "net": 5
+          }
+        },
+        "room1_room2": {
+          "policies": {
+            "baseline": {
+              "successes": 48,
+              "n": 64,
+              "success_rate": 0.75
+            },
+            "offline": {
+              "successes": 49,
+              "n": 64,
+              "success_rate": 0.765625
+            },
+            "online": {
+              "successes": 53,
+              "n": 64,
+              "success_rate": 0.828125
+            }
+          },
+          "online_vs_offline": {
+            "recover": 6,
+            "regress": 2,
+            "net": 4
+          },
+          "online_vs_baseline": {
+            "recover": 7,
+            "regress": 2,
+            "net": 5
+          }
+        },
+        "room3": {
+          "policies": {
+            "baseline": {
+              "successes": 22,
+              "n": 32,
+              "success_rate": 0.6875
+            },
+            "offline": {
+              "successes": 25,
+              "n": 32,
+              "success_rate": 0.78125
+            },
+            "online": {
+              "successes": 22,
+              "n": 32,
+              "success_rate": 0.6875
+            }
+          },
+          "online_vs_offline": {
+            "recover": 2,
+            "regress": 5,
+            "net": -3
+          },
+          "online_vs_baseline": {
+            "recover": 2,
+            "regress": 2,
+            "net": 0
+          }
+        }
+      },
+      "scenes": [
+        {
+          "room": 1,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        {
+          "room": 1,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "online": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "online": [
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 1,
+          "results": {
+            "baseline": [
+              false,
+              true,
+              false,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 2,
+          "results": {
+            "baseline": [
+              false,
+              false,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              false,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ],
+            "online": [
+              false,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          }
+        }
+      ]
+    },
+    "250": {
+      "groups": {
+        "all": {
+          "policies": {
+            "baseline": {
+              "successes": 70,
+              "n": 96,
+              "success_rate": 0.7291666666666666
+            },
+            "offline": {
+              "successes": 74,
+              "n": 96,
+              "success_rate": 0.7708333333333334
+            },
+            "online": {
+              "successes": 74,
+              "n": 96,
+              "success_rate": 0.7708333333333334
+            }
+          },
+          "online_vs_offline": {
+            "recover": 7,
+            "regress": 7,
+            "net": 0
+          },
+          "online_vs_baseline": {
+            "recover": 8,
+            "regress": 4,
+            "net": 4
+          }
+        },
+        "room1_room2": {
+          "policies": {
+            "baseline": {
+              "successes": 48,
+              "n": 64,
+              "success_rate": 0.75
+            },
+            "offline": {
+              "successes": 49,
+              "n": 64,
+              "success_rate": 0.765625
+            },
+            "online": {
+              "successes": 50,
+              "n": 64,
+              "success_rate": 0.78125
+            }
+          },
+          "online_vs_offline": {
+            "recover": 5,
+            "regress": 4,
+            "net": 1
+          },
+          "online_vs_baseline": {
+            "recover": 5,
+            "regress": 3,
+            "net": 2
+          }
+        },
+        "room3": {
+          "policies": {
+            "baseline": {
+              "successes": 22,
+              "n": 32,
+              "success_rate": 0.6875
+            },
+            "offline": {
+              "successes": 25,
+              "n": 32,
+              "success_rate": 0.78125
+            },
+            "online": {
+              "successes": 24,
+              "n": 32,
+              "success_rate": 0.75
+            }
+          },
+          "online_vs_offline": {
+            "recover": 2,
+            "regress": 3,
+            "net": -1
+          },
+          "online_vs_baseline": {
+            "recover": 3,
+            "regress": 1,
+            "net": 2
+          }
+        }
+      },
+      "scenes": [
+        {
+          "room": 1,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        },
+        {
+          "room": 1,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "online": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "online": [
+              false,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 1,
+          "results": {
+            "baseline": [
+              false,
+              true,
+              false,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 2,
+          "results": {
+            "baseline": [
+              false,
+              false,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              false,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ],
+            "online": [
+              false,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        }
+      ]
+    },
+    "300": {
+      "groups": {
+        "all": {
+          "policies": {
+            "baseline": {
+              "successes": 70,
+              "n": 96,
+              "success_rate": 0.7291666666666666
+            },
+            "offline": {
+              "successes": 74,
+              "n": 96,
+              "success_rate": 0.7708333333333334
+            },
+            "online": {
+              "successes": 75,
+              "n": 96,
+              "success_rate": 0.78125
+            }
+          },
+          "online_vs_offline": {
+            "recover": 6,
+            "regress": 5,
+            "net": 1
+          },
+          "online_vs_baseline": {
+            "recover": 8,
+            "regress": 3,
+            "net": 5
+          }
+        },
+        "room1_room2": {
+          "policies": {
+            "baseline": {
+              "successes": 48,
+              "n": 64,
+              "success_rate": 0.75
+            },
+            "offline": {
+              "successes": 49,
+              "n": 64,
+              "success_rate": 0.765625
+            },
+            "online": {
+              "successes": 51,
+              "n": 64,
+              "success_rate": 0.796875
+            }
+          },
+          "online_vs_offline": {
+            "recover": 4,
+            "regress": 2,
+            "net": 2
+          },
+          "online_vs_baseline": {
+            "recover": 5,
+            "regress": 2,
+            "net": 3
+          }
+        },
+        "room3": {
+          "policies": {
+            "baseline": {
+              "successes": 22,
+              "n": 32,
+              "success_rate": 0.6875
+            },
+            "offline": {
+              "successes": 25,
+              "n": 32,
+              "success_rate": 0.78125
+            },
+            "online": {
+              "successes": 24,
+              "n": 32,
+              "success_rate": 0.75
+            }
+          },
+          "online_vs_offline": {
+            "recover": 2,
+            "regress": 3,
+            "net": -1
+          },
+          "online_vs_baseline": {
+            "recover": 3,
+            "regress": 1,
+            "net": 2
+          }
+        }
+      },
+      "scenes": [
+        {
+          "room": 1,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        {
+          "room": 1,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 1,
+          "results": {
+            "baseline": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              false
+            ],
+            "offline": [
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "online": [
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ]
+          }
+        },
+        {
+          "room": 2,
+          "table": 2,
+          "results": {
+            "baseline": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "offline": [
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ],
+            "online": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 1,
+          "results": {
+            "baseline": [
+              false,
+              true,
+              false,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "online": [
+              false,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ]
+          }
+        },
+        {
+          "room": 3,
+          "table": 2,
+          "results": {
+            "baseline": [
+              false,
+              false,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "offline": [
+              false,
+              false,
+              true,
+              false,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ],
+            "online": [
+              false,
+              false,
+              true,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
