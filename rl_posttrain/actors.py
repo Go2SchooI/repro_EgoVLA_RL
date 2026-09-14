@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import torch
 from torch import nn
@@ -33,6 +33,8 @@ class DeterministicActor(nn.Module):
         action_dim: int,
         hidden_dims: Sequence[int] = (1024, 1024, 512),
         h_summary: HSummaryConfig | None = None,
+        parameterization: str = "direct_tanh",
+        actor_obs_normalizer: Mapping | None = None,
     ):
         super().__init__()
         self.obs_dim = int(obs_dim)
@@ -41,8 +43,28 @@ class DeterministicActor(nn.Module):
         self.obs_processor = HObsProcessor(self.obs_dim, self.h_summary)
         self.processed_obs_dim = int(self.obs_processor.processed_obs_dim)
         self.net = build_mlp(self.processed_obs_dim, hidden_dims, self.action_dim)
+        self.parameterization = parameterization
+        if parameterization == "reference_residual":
+            if actor_obs_normalizer is None or self.obs_dim < self.action_dim:
+                raise ValueError("Reference residual actor requires observation normalization metadata.")
+            mean = torch.as_tensor(actor_obs_normalizer["mean"], dtype=torch.float32)
+            scale = torch.as_tensor(actor_obs_normalizer["scale"], dtype=torch.float32)
+            if mean.shape != (self.obs_dim,) or scale.shape != (self.obs_dim,):
+                raise ValueError("Observation normalizer dimensions do not match the actor.")
+            scale = scale.clamp_min(float(actor_obs_normalizer.get("eps", 1e-6)))
+            self.register_buffer("reference_mean", mean[-self.action_dim:].clone())
+            self.register_buffer("reference_scale", scale[-self.action_dim:].clone())
+            nn.init.zeros_(self.net[-1].weight)
+            nn.init.zeros_(self.net[-1].bias)
+        elif parameterization != "direct_tanh":
+            raise ValueError(f"Unknown actor parameterization: {parameterization!r}")
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         if obs.shape[-1] != self.obs_dim:
             raise ValueError(f"Actor expected obs dim {self.obs_dim}, got {obs.shape}.")
-        return torch.tanh(self.net(self.obs_processor(obs)))
+        action = torch.tanh(self.net(self.obs_processor(obs)))
+        if self.parameterization == "reference_residual":
+            # The raw observation tail already holds normalized reference actions.
+            reference = obs[..., -self.action_dim:] * self.reference_scale + self.reference_mean
+            return (reference + action).clamp(-1.0, 1.0)
+        return action

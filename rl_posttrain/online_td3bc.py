@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import random
 import subprocess
 import sys
 from dataclasses import asdict
@@ -718,11 +719,17 @@ class OnlineTD3BCAgent:
         h_summary = HSummaryConfig.from_state_dict(checkpoint.get("h_summary"))
         actor_hidden_dims = tuple(checkpoint["actor_hidden_dims"])
         critic_hidden_dims = tuple(checkpoint["critic_hidden_dims"])
+        self.actor_parameterization = checkpoint.get("actor_parameterization", "direct_tanh")
+        self.initialization = checkpoint.get("initialization", {"mode": "offline_checkpoint"})
+        self.saved_rng_state = checkpoint.get("rng_state")
+        self.replay_rng = None
         self.actor = DeterministicActor(
             int(checkpoint["actor_obs_dim"]),
             int(checkpoint["action_dim"]),
             actor_hidden_dims,
             h_summary=h_summary,
+            parameterization=self.actor_parameterization,
+            actor_obs_normalizer=checkpoint.get("actor_obs_normalizer"),
         ).to(self.device)
         self.critic = DoubleQCritic(
             int(checkpoint["critic_obs_dim"]),
@@ -768,6 +775,18 @@ class OnlineTD3BCAgent:
         self.actor_updates = int(checkpoint.get("actor_updates", 0))
         self.online_episode = int(checkpoint.get("online_episode", 0))
         self.env_steps = int(checkpoint.get("env_steps", 0))
+
+    def attach_replay_rng(self, rng: np.random.Generator) -> None:
+        """Restore randomness only after network/logger construction has finished."""
+        self.replay_rng = rng
+        if self.saved_rng_state is not None:
+            state = self.saved_rng_state
+            rng.bit_generator.state = copy.deepcopy(state["replay_generator"])
+            random.setstate(state["python"])
+            np.random.set_state(state["numpy"])
+            torch.set_rng_state(state["torch_cpu"].cpu())
+            if self.device.type == "cuda" and state["torch_cuda"]:
+                torch.cuda.set_rng_state_all([s.cpu() for s in state["torch_cuda"]])
 
     def train_step(
         self,
@@ -871,6 +890,8 @@ class OnlineTD3BCAgent:
         payload = {
             "format": "td3bc_ref_actor_v1",
             "online_format": "online_td3bc_actor_export_v1",
+            "actor_parameterization": self.actor_parameterization,
+            "initialization": self.initialization,
             "config": self.offline_config,
             "online_config": _checkpoint_online_config_payload(cfg),
             "online_model_path": _canonical_model_path(cfg["online"].get("model_path")),
@@ -909,6 +930,14 @@ class OnlineTD3BCAgent:
 
     def save_training_checkpoint(self, path: str | Path, cfg: Dict[str, Any]) -> Path:
         payload = self.actor_checkpoint_payload(cfg)
+        if self.replay_rng is not None:
+            payload["rng_state"] = {
+                "replay_generator": copy.deepcopy(self.replay_rng.bit_generator.state),
+                "python": random.getstate(),
+                "numpy": np.random.get_state(),
+                "torch_cpu": torch.get_rng_state(),
+                "torch_cuda": torch.cuda.get_rng_state_all() if self.device.type == "cuda" else [],
+            }
         payload.update(
             {
                 "format": "online_td3bc_checkpoint_v1",
@@ -1714,6 +1743,10 @@ def main() -> None:
     init_checkpoint = resolve_init_checkpoint(cfg["online"]["init_checkpoint"])
     resume_checkpoint = Path(args.resume).expanduser() if args.resume else None
 
+    seed = int(cfg["online"]["seed"])
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     agent = OnlineTD3BCAgent(
         resume_checkpoint or init_checkpoint,
         cfg,
@@ -1766,6 +1799,7 @@ def main() -> None:
     rng = np.random.default_rng(int(cfg["online"]["seed"]))
     sampler = MixedReplaySampler(base_view, online_store, agent.device, rng)
     wandb_logger = SafeWandbLogger(cfg, payload)
+    agent.attach_replay_rng(rng)
     wandb_logger.summary("base_replay_fingerprint", replay_manifest["base_replay"]["fingerprint"])
     wandb_logger.summary("online_replay_fingerprint", replay_manifest["online_replay"]["fingerprint"])
     wandb_logger.summary("online_replay_shard_count", float(len(replay_manifest["online_replay"]["shards"])))
@@ -1954,7 +1988,7 @@ def main() -> None:
                 wandb_logger.log(eval_metrics, step=agent.global_update)
                 wandb_logger.summary("latest_eval_summary", str(summary_path))
             current_success = eval_metrics.get("eval_all/success_rate", 0.0)
-            if current_success > best_eval_success:
+            if cfg["eval"].get("save_best", True) and current_success > best_eval_success:
                 best_eval_success = float(current_success)
                 best_actor = output_root / "checkpoints" / "best_actor.pt"
                 best_state = output_root / "checkpoints" / "best_online.pt"

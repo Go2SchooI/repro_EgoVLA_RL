@@ -313,6 +313,8 @@ def load_actor_policy(path: str | Path, device: str | torch.device = "cuda"):
         int(checkpoint["action_dim"]),
         tuple(checkpoint["actor_hidden_dims"]),
         h_summary=h_summary,
+        parameterization=checkpoint.get("actor_parameterization", "direct_tanh"),
+        actor_obs_normalizer=checkpoint.get("actor_obs_normalizer"),
     ).to(device)
     actor.load_state_dict(checkpoint["actor_state_dict"])
     actor.eval()
