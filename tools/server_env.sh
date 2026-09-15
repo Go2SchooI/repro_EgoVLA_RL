@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Source from an interactive shell, or from a project launcher.
+EGOVLA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EGOVLA_RUNTIME_ROOT="${EGOVLA_RUNTIME_ROOT:-$(dirname "$EGOVLA_ROOT")/egovla-runtime}"
+export EGOVLA_ROOT EGOVLA_RUNTIME_ROOT
+export CONDA_PREFIX="$EGOVLA_RUNTIME_ROOT/env"
+export PATH="$CONDA_PREFIX/bin:$PATH"
+export IsaacLab_PATH="$EGOVLA_RUNTIME_ROOT/IsaacLab"
+export VILA_PURELIB="$EGOVLA_RUNTIME_ROOT/vendor"
+export MODEL_PATH="$EGOVLA_ROOT/checkpoints/ego_vla_checkpoint/checkpoint-3000"
+export TASK=Humanoid-Open-Laptop-v0
+export OMNI_KIT_ACCEPT_EULA=YES
+# Project-local proxy inherited only by shells that source this file.
+export HTTP_PROXY="${EGOVLA_HTTP_PROXY-http://127.0.0.1:7897}"
+export HTTPS_PROXY="$HTTP_PROXY" http_proxy="$HTTP_PROXY" https_proxy="$HTTP_PROXY"
+export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
+export no_proxy="$NO_PROXY"
+export CUDA_VISIBLE_DEVICES="${EGOVLA_GPU:-0}"
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export EGOVLA_RENDER_GPU="${EGOVLA_GPU:-0}"
+export EGOVLA_KIT_THREADS="${EGOVLA_KIT_THREADS:-8}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
+export CUDA_LIB_PATH="$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib"
+export SYSTEM_LIBSTDCPP_PATH=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
+export PYTHONPATH="$EGOVLA_ROOT:$EGOVLA_ROOT/VILA:$EGOVLA_ROOT/manopth${PYTHONPATH:+:$PYTHONPATH}"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+export SAVE_VIDEO=0 SAVE_FRAMES=0 PROJECT_TRAJS=0
+export EPISODE_START_IDX=0 TRIAL_START_IDX=0 RANDOMIZE_TOTAL_EPISODES=8 RANDOMIZE_TOTAL_TRIALS=2
+export SMOOTH_WEIGHT=0.2 HAND_SMOOTH_WEIGHT=0.8 CHUNK_EXEC_LEN=none
+export VISION_INPUT_MODE=real IMAGE_UPDATE_INTERVAL=1 IMAGE_DELAY_STEPS=0 PROPRIO_ABLATION_MODE=none PROPRIO_DELAY_STEPS=0
+export RL_EXPLORATION_NOISE_STD=0 RL_EXPLORATION_NOISE_CLIP=0
+cd "$EGOVLA_ROOT"

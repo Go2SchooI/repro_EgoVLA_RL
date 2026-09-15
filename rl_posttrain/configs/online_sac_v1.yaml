@@ -1,0 +1,99 @@
+online:
+  enabled: true
+  task: Humanoid-Open-Laptop-v0
+  model_path: checkpoints/ego_vla_checkpoint/checkpoint-3000
+  init_checkpoint: playground_eval/rl_checkpoints/open_laptop_hsummary_h_proj128_alpha0001/actor.pt
+  base_replay: playground_eval/replays/open_laptop_v4_checkpoint3000_20260509_174957
+  output_root: playground_eval/online_sac/seed0
+  freeze_egovla: true
+  train_scenes:
+  - room1_table1
+  - room1_table2
+  - room2_table1
+  - room2_table2
+  unseen_eval_scenes:
+  - room3_table1
+  - room3_table2
+  total_online_episodes: 150
+  critic_only_episodes: 30
+  scene_sampling: balanced
+  max_eval_steps: 0
+  seed: 0
+  device: cuda
+reward:
+  type: sparse_final_success
+  success_reward: 1.0
+  failure_reward: 0.0
+  done_on_success: true
+  done_on_timeout: true
+replay_mix:
+  assert_base_replay_has_no_unseen_scenes: true
+  strict_resume_manifest_match: true
+  min_online_transitions_for_training: 1024
+  critic_only:
+    base_ratio: 0.5
+    online_ratio: 0.5
+  joint:
+    base_ratio: 0.25
+    online_ratio: 0.75
+exploration:
+  enabled: false
+  enabled_after_episodes: 10
+  noise_std: 0.0
+  noise_clip: 0.0
+  eval_noise: false
+td3:
+  gamma: 0.99
+  tau: 0.005
+  policy_delay: 2
+  target_noise: 0.1
+  target_noise_clip: 0.2
+optimization:
+  actor_lr: 0.0001
+  critic_lr: 0.0003
+  batch_size: 256
+  utd_ratio: 1
+  max_updates_per_episode: 800
+td3bc:
+  alpha: 0.0
+  bc_weight: 0.0
+  bc_weight_schedule: null
+gates:
+  residual_scale: 1.0
+  safety_gate: false
+  q_gate: false
+eval:
+  every_episodes: 50
+  num_episodes: 8
+  num_trials: 2
+  include_baseline: true
+  include_identity: false
+  include_offline_init: true
+  report_seen_unseen_split: true
+  no_save_video: true
+  save_best: false
+wandb:
+  enabled: true
+  project: egovla-online-rl
+  entity: null
+  group: online_sac_from_offline
+  run_name: sac_seed0
+  mode: online
+  dir: playground_eval/online_sac/seed0
+  tags:
+  - sac
+  - offline-initialized
+  - seed0
+  - deterministic-and-stochastic-evaluation
+  strict: true
+  log_every_updates: 100
+  log_episode: true
+  log_eval: true
+algorithm: sac
+sac:
+  init_log_std: -5.8
+  log_std_min: -10.0
+  log_std_max: 0.0
+  initial_temperature: 0.0001
+  temperature_lr: 0.0003
+  target_entropy: -38.0

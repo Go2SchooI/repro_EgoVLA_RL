@@ -89,6 +89,25 @@ AppLauncher.add_app_launcher_args(app_parser)
 app_parser.set_defaults(headless=True, enable_cameras=True, device="cuda")
 app_args, _ = app_parser.parse_known_args()
 
+# CUDA visibility isolates model/physics, while Vulkan needs an explicit renderer GPU.
+# Opt-in for independent server jobs; default launch behavior is unchanged.
+render_gpu = os.environ.get("EGOVLA_RENDER_GPU")
+if render_gpu is not None:
+    if not render_gpu.isdigit():
+        raise ValueError("EGOVLA_RENDER_GPU must be a non-negative physical GPU index")
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
+    if len(visible_devices) != 1 or not visible_devices[0]:
+        raise ValueError("Server GPU jobs require exactly one CUDA_VISIBLE_DEVICES entry")
+    kit_threads = int(os.environ.get("EGOVLA_KIT_THREADS", "8"))
+    if kit_threads < 1:
+        raise ValueError("EGOVLA_KIT_THREADS must be positive")
+    app_args.kit_args = (
+        app_args.kit_args
+        + f" --/renderer/activeGpu={int(render_gpu)} --/renderer/multiGpu/enabled=false"
+        + f" --/plugins/carb.tasking.plugin/threadCount={kit_threads}"
+        + f" --/plugins/omni.tbb.globalcontrol/maxThreadCount={kit_threads}"
+    ).strip()
+
 # launch omniverse app
 app_launcher = AppLauncher(app_args)
 simulation_app = app_launcher.app
@@ -807,9 +826,20 @@ def main():
     rl_actor_bundle = None
     rl_actor = None
     rl_actor_obs_normalizer = None
+    rl_sac_generator = None
+    rl_sac_mode = os.environ.get("RL_SAC_MODE", "deterministic")
+    rl_sac_seed = int(os.environ.get("RL_SAC_SEED", "0"))
+    if rl_sac_mode not in ("deterministic", "stochastic"):
+      raise ValueError("Invalid RL_SAC_MODE")
     if rl_actor_enabled:
       rl_actor_bundle = load_actor_policy(rl_actor_checkpoint, device="cuda")
       rl_actor = rl_actor_bundle["actor"]
+      is_sac = rl_actor_bundle["checkpoint"].get("algorithm") == "sac"
+      if rl_sac_mode == "stochastic":
+        if not is_sac or rl_exploration_noise_std != 0:
+          raise ValueError("SAC sampling requires a SAC checkpoint and no external noise")
+        rl_sac_generator = torch.Generator(device="cuda").manual_seed(rl_sac_seed)
+      print(f"[rl-policy] algorithm={'sac' if is_sac else 'td3bc'} mode={rl_sac_mode} sampling_seed={rl_sac_seed}", flush=True)
       rl_actor_obs_normalizer = rl_actor_bundle["actor_obs_normalizer"]
       print(
         "[rl-actor] "
@@ -1012,6 +1042,8 @@ def main():
             **metadata,
             "action_normalizer_mode": "checkpoint",
             "actor_checkpoint": str(rl_actor_checkpoint),
+            "policy_mode": rl_sac_mode,
+            "policy_sampling_seed": rl_sac_seed,
           },
           save_raw=rl_collect_save_raw,
         )
@@ -1356,7 +1388,11 @@ def main():
               actor_device = next(rl_actor.parameters()).device
               with torch.inference_mode():
                 actor_input = torch.as_tensor(actor_obs_norm, dtype=torch.float32, device=actor_device)
-                a_exec_norm = rl_actor(actor_input).detach().cpu().numpy().reshape(-1)
+                if rl_sac_mode == "stochastic":
+                  actor_action, _, _ = rl_actor.sample(actor_input, generator=rl_sac_generator)
+                else:
+                  actor_action = rl_actor(actor_input)
+                a_exec_norm = actor_action.detach().cpu().numpy().reshape(-1)
               if a_exec_norm.shape != (rl_action_spec.dim,):
                 raise ValueError(
                   f"Actor output shape mismatch: got {a_exec_norm.shape}, "

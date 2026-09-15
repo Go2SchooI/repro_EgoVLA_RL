@@ -305,16 +305,23 @@ def load_actor_policy(path: str | Path, device: str | torch.device = "cuda"):
         checkpoint = torch.load(path, map_location=device, weights_only=False)
     except TypeError:
         checkpoint = torch.load(path, map_location=device)
-    if checkpoint.get("format") not in ("td3bc_ref_actor_v1", "online_td3bc_checkpoint_v1"):
+    if checkpoint.get("format") not in ("td3bc_ref_actor_v1", "online_td3bc_checkpoint_v1", "sac_actor_v1", "online_sac_checkpoint_v1"):
         raise ValueError(f"Unsupported actor checkpoint format: {checkpoint.get('format')!r}")
     h_summary = HSummaryConfig.from_state_dict(checkpoint.get("h_summary"))
-    actor = DeterministicActor(
+    actor_cls = DeterministicActor
+    actor_kwargs = {}
+    if checkpoint.get("algorithm") == "sac":
+        from rl_posttrain.sac_actor import SquashedGaussianActor
+        actor_cls = SquashedGaussianActor
+        actor_kwargs = checkpoint["sac_policy"]
+    actor = actor_cls(
         int(checkpoint["actor_obs_dim"]),
         int(checkpoint["action_dim"]),
         tuple(checkpoint["actor_hidden_dims"]),
         h_summary=h_summary,
         parameterization=checkpoint.get("actor_parameterization", "direct_tanh"),
         actor_obs_normalizer=checkpoint.get("actor_obs_normalizer"),
+        **actor_kwargs,
     ).to(device)
     actor.load_state_dict(checkpoint["actor_state_dict"])
     actor.eval()

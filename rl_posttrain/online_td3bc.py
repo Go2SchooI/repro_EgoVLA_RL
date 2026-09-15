@@ -1094,6 +1094,8 @@ def collect_online_episode(
     if log_path.exists():
         log_path.unlink()
 
+    if cfg.get("algorithm") == "sac" and (noise_std != 0 or noise_clip != 0):
+        raise ValueError("SAC uses policy sampling, not external TD3 noise")
     total_online_episodes = max(1, int(cfg["online"]["total_online_episodes"]))
     num_train_scenes = max(1, len(cfg["online"]["train_scenes"]))
     randomize_total_trials = max(1, (total_online_episodes + num_train_scenes - 1) // num_train_scenes)
@@ -1123,6 +1125,8 @@ def collect_online_episode(
             "RL_EXPLORATION_NOISE_STD": str(float(noise_std)),
             "RL_EXPLORATION_NOISE_CLIP": str(float(noise_clip)),
             "RL_EXPLORATION_NOISE_SEED": str(int(cfg["online"].get("seed", 0)) + int(episode_idx)),
+            "RL_SAC_MODE": "stochastic" if cfg.get("algorithm") == "sac" else "deterministic",
+            "RL_SAC_SEED": str(100000 + int(cfg["online"].get("seed", 0)) * 10000 + int(episode_idx)),
             "RESULT_PATH": str(result_path),
             "RUN_DIR": str(run_dir),
         }
@@ -1212,10 +1216,13 @@ def _run_updates(
             update_actor_target=update_actor_target,
         )
         last_logs = {**train_logs, **sample_logs, "skip_updates": 0.0}
+        if not all(np.isfinite(float(v)) for v in last_logs.values()):
+            raise FloatingPointError("Nonfinite online update metric")
         log_every = int(cfg["wandb"].get("log_every_updates", 0) or 0)
         if wandb_logger is not None and log_every > 0 and agent.global_update % log_every == 0:
             wandb_logger.log(
                 {
+                    **{k: v for k, v in last_logs.items() if k.startswith("sac/")},
                     "online/global_step": float(agent.global_update),
                     "online/critic_updates": float(agent.critic_updates),
                     "online/actor_updates": float(agent.actor_updates),
@@ -1623,7 +1630,7 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
 
 def _build_config_payload(args: argparse.Namespace, cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "format": "online_td3bc_config_v1",
+        "format": "online_sac_config_v1" if cfg.get("algorithm") == "sac" else "online_td3bc_config_v1",
         "command": " ".join(sys.argv),
         "config": cfg,
         "args": vars(args),
@@ -1747,7 +1754,13 @@ def main() -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    agent = OnlineTD3BCAgent(
+    agent_cls = OnlineTD3BCAgent
+    if cfg.get("algorithm", "td3bc") == "sac":
+        from rl_posttrain.sac import OnlineSACAgent
+        agent_cls = OnlineSACAgent
+    elif cfg.get("algorithm", "td3bc") != "td3bc":
+        raise ValueError("Unsupported online algorithm")
+    agent = agent_cls(
         resume_checkpoint or init_checkpoint,
         cfg,
         device=cfg["online"]["device"],
@@ -1957,6 +1970,7 @@ def main() -> None:
                     "q/q_adv": float(train_logs.get("q_adv", 0.0)),
                 }
             )
+        episode_metrics.update({k: v for k, v in train_logs.items() if k.startswith("sac/")})
         if cfg["wandb"].get("log_episode", True):
             wandb_logger.log(episode_metrics, step=agent.global_update)
         if train_logs and agent.global_update % log_every_updates == 0:
