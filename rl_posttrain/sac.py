@@ -19,8 +19,8 @@ class OnlineSACAgent(OnlineTD3BCAgent):
         if float(cfg["sac"]["initial_temperature"]) <= 0:
             raise ValueError("SAC temperature must be positive")
         is_sac = source.get("algorithm") == "sac"
-        if source.get("actor_parameterization", "direct_tanh") != "direct_tanh":
-            raise ValueError("Use the original offline direct actor, not the B residual actor")
+        if source.get("actor_parameterization", "direct_tanh") not in ("direct_tanh", "reference_logit_residual"):
+            raise ValueError("Unsupported SAC actor parameterization")
         if not is_sac and int(source.get("online_episode", 0)) != 0:
             raise ValueError("SAC warm-start must be the offline checkpoint, not an online milestone")
         compatible = copy.deepcopy(source)
@@ -35,7 +35,9 @@ class OnlineSACAgent(OnlineTD3BCAgent):
         opts = source.get("sac_policy", {}) if is_sac else {
             k: cfg["sac"][k] for k in ["init_log_std", "log_std_min", "log_std_max"]}
         self.actor = SquashedGaussianActor(self.actor_obs_dim, self.action_dim,
-            self.actor_hidden_dims, h_summary=self.h_summary, **opts).to(self.device)
+            self.actor_hidden_dims, h_summary=self.h_summary,
+            parameterization=self.actor_parameterization,
+            actor_obs_normalizer=source.get("actor_obs_normalizer"), **opts).to(self.device)
         loaded = self.actor.load_state_dict(source["actor_state_dict"], strict=False)
         expected = [] if is_sac else ["log_std_head.weight", "log_std_head.bias"]
         if sorted(loaded.missing_keys) != sorted(expected) or loaded.unexpected_keys:
@@ -57,8 +59,9 @@ class OnlineSACAgent(OnlineTD3BCAgent):
             self.online_episode = self.env_steps = 0
             self.saved_rng_state = None
             self.replay_manifest = None
-            self.initialization = dict(mode="offline_actor_and_critic", source=str(checkpoint_path),
-                deterministic_mean_preserved=True, temperature_initialized=True)
+            self.initialization = copy.deepcopy(source.get("sac_initialization", dict(
+                mode="offline_actor_and_critic", source=str(checkpoint_path),
+                deterministic_mean_preserved=True, temperature_initialized=True)))
 
     def train_step(self, batch, cfg, *, update_actor, update_actor_target):
         self.global_update += 1

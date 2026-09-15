@@ -44,7 +44,7 @@ class DeterministicActor(nn.Module):
         self.processed_obs_dim = int(self.obs_processor.processed_obs_dim)
         self.net = build_mlp(self.processed_obs_dim, hidden_dims, self.action_dim)
         self.parameterization = parameterization
-        if parameterization == "reference_residual":
+        if parameterization in ("reference_residual", "reference_logit_residual"):
             if actor_obs_normalizer is None or self.obs_dim < self.action_dim:
                 raise ValueError("Reference residual actor requires observation normalization metadata.")
             mean = torch.as_tensor(actor_obs_normalizer["mean"], dtype=torch.float32)
@@ -62,9 +62,17 @@ class DeterministicActor(nn.Module):
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         if obs.shape[-1] != self.obs_dim:
             raise ValueError(f"Actor expected obs dim {self.obs_dim}, got {obs.shape}.")
-        action = torch.tanh(self.net(self.obs_processor(obs)))
+        logits = self.net(self.obs_processor(obs))
+        if self.parameterization == "reference_logit_residual":
+            return torch.tanh(logits + self.reference_logits(obs))
+        action = torch.tanh(logits)
         if self.parameterization == "reference_residual":
             # The raw observation tail already holds normalized reference actions.
             reference = obs[..., -self.action_dim:] * self.reference_scale + self.reference_mean
             return (reference + action).clamp(-1.0, 1.0)
         return action
+
+    def reference_logits(self, obs: torch.Tensor) -> torch.Tensor:
+        # Clamp only the fixed reference before atanh, never the sampled action.
+        reference = obs[..., -self.action_dim:] * self.reference_scale + self.reference_mean
+        return torch.atanh(reference.clamp(-1.0 + 1e-6, 1.0 - 1e-6))

@@ -12,8 +12,8 @@ class SquashedGaussianActor(DeterministicActor):
     def __init__(self, *args, init_log_std=-5.8, log_std_min=-10.0,
                  log_std_max=0.0, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.parameterization != "direct_tanh":
-            raise ValueError("SAC conversion requires a direct_tanh source actor")
+        if self.parameterization not in ("direct_tanh", "reference_logit_residual"):
+            raise ValueError("SAC requires a direct or reference-logit Gaussian mean")
         if not log_std_min <= init_log_std <= log_std_max:
             raise ValueError("Initial log std must lie within its bounds")
         self.log_std_min, self.log_std_max = float(log_std_min), float(log_std_max)
@@ -25,7 +25,10 @@ class SquashedGaussianActor(DeterministicActor):
 
     def distribution_parameters(self, obs):
         features = self.net[:-1](self.obs_processor(obs))
-        return self.net[-1](features), self.log_std_head(features).clamp(
+        mean = self.net[-1](features)
+        if self.parameterization == "reference_logit_residual":
+            mean = mean + self.reference_logits(obs)
+        return mean, self.log_std_head(features).clamp(
             self.log_std_min, self.log_std_max)
 
     def sample(self, obs, *, generator=None):
