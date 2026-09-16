@@ -9,6 +9,7 @@ import os
 import re
 import random
 import subprocess
+from rl_posttrain.simulator_process import run_simulator
 import sys
 from dataclasses import asdict
 from datetime import datetime
@@ -1139,7 +1140,7 @@ def collect_online_episode(
     )
     with log_path.open("w") as log_file:
         try:
-            subprocess.run(
+            run_simulator(
                 ["./run_local_eval.sh"],
                 env=env,
                 check=True,

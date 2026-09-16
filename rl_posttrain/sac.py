@@ -48,7 +48,25 @@ class OnlineSACAgent(OnlineTD3BCAgent):
                                       dtype=torch.float32, device=self.device, requires_grad=True)
         self.alpha_opt = torch.optim.Adam([self.log_alpha], lr=float(cfg["sac"]["temperature_lr"]))
         self.target_entropy = float(cfg["sac"].get("target_entropy", -self.action_dim))
+        self.mean_anchor_weight = float(cfg["sac"].get("mean_anchor_weight", 0.0))
+        if not np.isfinite(self.mean_anchor_weight) or self.mean_anchor_weight < 0:
+            raise ValueError("Mean anchor weight must be finite and nonnegative")
+        if is_sac and float(source.get("mean_anchor_weight", 0.0)) != self.mean_anchor_weight:
+            raise ValueError("Cannot change mean anchor weight while resuming SAC")
+        self.mean_anchor = None
+        if self.mean_anchor_weight > 0:
+            if is_sac and "mean_anchor_state_dict" not in source:
+                raise ValueError("Anchored SAC checkpoint is missing its frozen initial actor")
+            self.mean_anchor = copy.deepcopy(self.actor)
+            if is_sac:
+                self.mean_anchor.load_state_dict(source["mean_anchor_state_dict"])
+            self.mean_anchor.eval().requires_grad_(False)
         if is_sac:
+            for key in ["init_log_std", "log_std_min", "log_std_max"]:
+                if float(cfg["sac"][key]) != float(source["sac_policy"][key]):
+                    raise ValueError("Cannot change SAC sampling configuration on resume")
+            if float(source["target_entropy"]) != self.target_entropy:
+                raise ValueError("Cannot change SAC target entropy on resume")
             with torch.no_grad(): self.log_alpha.copy_(source["log_alpha"])
             for key, opt in [("actor_optimizer_state_dict", self.actor_opt),
                              ("critic_optimizer_state_dict", self.critic_opt),
@@ -88,9 +106,15 @@ class OnlineSACAgent(OnlineTD3BCAgent):
         if update_actor:
             for p in self.critic.parameters(): p.requires_grad_(False)
             try:
-                action, logp, _ = self.actor.sample(batch["actor_obs"])
+                action, logp, mean_action = self.actor.sample(batch["actor_obs"])
                 aq1, aq2 = self.critic(batch["critic_obs"], action)
-                actor_loss = (alpha * logp - torch.minimum(aq1, aq2)).mean()
+                sac_actor_loss = (alpha * logp - torch.minimum(aq1, aq2)).mean()
+                actor_loss = sac_actor_loss
+                anchor_loss = mean_action.new_zeros(())
+                if self.mean_anchor is not None:
+                    with torch.no_grad(): reference_mean = self.mean_anchor(batch["actor_obs"])
+                    anchor_loss = F.mse_loss(mean_action, reference_mean)
+                    actor_loss = actor_loss + self.mean_anchor_weight * anchor_loss
                 if not torch.isfinite(actor_loss): raise FloatingPointError("Nonfinite SAC actor loss")
                 self.actor_opt.zero_grad(set_to_none=True)
                 actor_loss.backward()
@@ -106,6 +130,9 @@ class OnlineSACAgent(OnlineTD3BCAgent):
                 _, log_std = self.actor.distribution_parameters(batch["actor_obs"])
             logs.update(actor_loss=float(actor_loss.detach()), **{
                 "sac/actor_updated": 1.0, "sac/entropy": float(-logp.detach().mean()),
+                "sac/unregularized_actor_loss": float(sac_actor_loss.detach()),
+                "sac/mean_anchor_loss": float(anchor_loss.detach()),
+                "sac/weighted_mean_anchor_loss": float(self.mean_anchor_weight * anchor_loss.detach()),
                 "sac/temperature_loss": float(alpha_loss.detach()),
                 "sac/std_mean": float(log_std.exp().mean()),
                 "sac/temperature": float(self.log_alpha.exp().detach())})
@@ -116,6 +143,9 @@ class OnlineSACAgent(OnlineTD3BCAgent):
         payload.update(format="sac_actor_v1", online_format="sac_actor_export_v1",
                        algorithm="sac", sac_policy=self.actor.policy_config(),
                        log_alpha=self.log_alpha.detach().clone(), target_entropy=self.target_entropy)
+        if self.mean_anchor is not None:
+            payload.update(mean_anchor_weight=self.mean_anchor_weight,
+                           mean_anchor_state_dict=self.mean_anchor.state_dict())
         return payload
 
     def save_training_checkpoint(self, path, cfg):

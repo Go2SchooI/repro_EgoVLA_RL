@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+from rl_posttrain.simulator_process import run_simulator
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -143,7 +144,7 @@ def _run_eval(
 
     result_path.unlink(missing_ok=True)
     print(f"[paired-eval] running mode={mode} result_path={result_path}", flush=True)
-    subprocess.run(["./run_local_eval.sh"], env=env, check=True)
+    run_simulator(["./run_local_eval.sh"], env=env, check=True)
     records = _parse_result_records(result_path)
     results = [bool(item["success"]) for item in records]
     return {
