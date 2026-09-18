@@ -50,6 +50,7 @@ The actor outputs the normalized execution command. The critic sees actor observ
 
 | Path | Role |
 | --- | --- |
+| [assets/](assets/README.md) | Bundled hand-retargeting weights and simulation initialization data; historical pose sets are under `initial_poses/legacy/`. |
 | [rl_posttrain/](rl_posttrain/) | Post-training modules and existing unit tests. |
 | [collect_base.py](rl_posttrain/collect_base.py) | Base/identity replay collection with cached episode/trial shards. |
 | [td3bc_ref.py](rl_posttrain/td3bc_ref.py) | Offline TD3+BC or pure-BC training. |
@@ -65,6 +66,8 @@ The actor outputs the normalized execution command. The critic sees actor observ
 | [cmd.md](cmd.md) | Historical experiment cookbook with machine-specific paths and older protocols. Use the workflow below for a consistent split. |
 
 ## Environment and Assets
+
+The small hand-retargeting networks and initial-pose tables are included under [assets/](assets/README.md). They support simulation execution and reset; they are separate from the EgoVLA backbone and RL checkpoints. Their paths are resolved relative to the source checkout.
 
 On a fresh machine, start with the upstream [installation instructions](README_EGOVLA_ORIGINAL.md#installation) and obtain the benchmark assets, MANO models, VILA dependencies, and an appropriate EgoVLA checkpoint. [build_env.sh](build_env.sh) installs additional dependencies; it does not provision the simulator or download all assets. A Git clone alone is insufficient for simulation.
 

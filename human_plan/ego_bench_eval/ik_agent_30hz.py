@@ -1,3 +1,5 @@
+from human_plan.asset_paths import INIT_POSES_PATH
+
 import argparse
 import builtins
 import contextlib
@@ -918,7 +920,7 @@ def main():
     Path(save_path).mkdir(exist_ok=True, parents=True)
 
     import pickle
-    with open("init_poses_fixed_set_100traj.pkl", "rb") as f:
+    with open(INIT_POSES_PATH, "rb") as f:
        init_poses = pickle.load(f)
 
     task_name = task_args.task[9:-3]

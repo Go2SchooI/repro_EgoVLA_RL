@@ -1,3 +1,5 @@
+from human_plan.asset_paths import HAND_ACTUATION_PATH
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -146,10 +148,10 @@ if __name__ == "__main__":
     # Initialize Model, Train, and Save
     model = HandActuationNet(input_dim=30, output_dim=12 * 2)  # 15 dims for each hand
     train_model(model, train_loader, val_loader, epochs=2000, lr=0.001)
-    torch.save(model.state_dict(), "hand_actuation_net.pth")
+    torch.save(model.state_dict(), HAND_ACTUATION_PATH)
 
     # Load Model and Perform Inference
-    model.load_state_dict(torch.load("hand_actuation_net.pth"))
+    model.load_state_dict(torch.load(HAND_ACTUATION_PATH))
 
     # Test Inference on a new sample
     test_left_mano = [0.1] * 15  # Replace with actual test data

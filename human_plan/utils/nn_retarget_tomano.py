@@ -1,3 +1,5 @@
+from human_plan.asset_paths import HAND_MANO_RETARGET_PATH
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -136,10 +138,10 @@ if __name__ == "__main__":
     # Initialize Model, Train, and Save
     model = HandActuationNet(input_dim=12 * 2, output_dim=15 * 2)  # 15 dims for each hand
     train_model(model, train_loader, val_loader, epochs=100, lr=0.001)
-    torch.save(model.state_dict(), "hand_mano_retarget_net.pth")
+    torch.save(model.state_dict(), HAND_MANO_RETARGET_PATH)
 
     # Load Model and Perform Inference
-    model.load_state_dict(torch.load("hand_mano_retarget_net.pth"))
+    model.load_state_dict(torch.load(HAND_MANO_RETARGET_PATH))
 
     # Test Inference on a new sample
     test_qpos = [0.1] * 24  # Replace with actual test data

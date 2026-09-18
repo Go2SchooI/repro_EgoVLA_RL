@@ -1,3 +1,5 @@
+from human_plan.asset_paths import INIT_POSES_PATH
+
 from human_plan.dataset_preprocessing.otv_isaaclab.utils import (
   parse_single_seq_image,
   parse_single_seq_hand,
@@ -49,5 +51,5 @@ for task_name, seq_name in tqdm(
 
 import pickle
 
-with open("init_poses_fixed_set_100traj.pkl", "wb") as f:
+with open(INIT_POSES_PATH, "wb") as f:
   pickle.dump(starting_dict, f)

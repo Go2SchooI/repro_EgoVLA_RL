@@ -1,3 +1,5 @@
+from human_plan.asset_paths import HAND_ACTUATION_PATH, HAND_MANO_RETARGET_PATH
+
 import torch
 try:
   from omni.isaac.lab.utils.math import subtract_frame_transforms, quat_apply
@@ -696,7 +698,7 @@ hand_actuation_net = HandActuationNet(
     input_dim=30, output_dim=12 * 2
 ) 
 hand_actuation_net.load_state_dict(
-    torch.load("hand_actuation_net.pth")
+    torch.load(HAND_ACTUATION_PATH)
 )
 hand_actuation_net.to("cuda")
 
@@ -705,7 +707,7 @@ hand_mano_retarget_net = HandActuationNet(
     input_dim=12 * 2, output_dim=15 * 2
 ) 
 hand_mano_retarget_net.load_state_dict(
-    torch.load("hand_mano_retarget_net.pth")
+    torch.load(HAND_MANO_RETARGET_PATH)
 )
 hand_mano_retarget_net.to("cuda")
 
