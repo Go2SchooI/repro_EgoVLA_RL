@@ -2,6 +2,25 @@
 
 An independently developed RL post-training extension to EgoVLA for **Open-Laptop in IsaacLab simulation**. Both offline and online pipelines have run end to end. A completed single-seed [online interaction-budget experiment](docs/experiments/online-budget-20260915.md) reports matched evaluation through 300 online episodes, including separate RL-ID and RL-OOD results.
 
+## TD3+BC Online Interaction Budget
+
+A single training lineage continues from an offline TD3+BC actor and critic to **300 total online trajectories**. The frozen EgoVLA policy and evaluation settings are shared across milestones. Each policy is evaluated on six scenes with eight fixed initializations and two trials per scene: **96 rollouts per checkpoint**, with exploration disabled during evaluation.
+
+| Policy | All six scenes | room1/room2 (RL-ID) | room3 (RL-OOD) |
+| --- | ---: | ---: | ---: |
+| EgoVLA baseline | 70/96 (72.92%) | 48/64 (75.00%) | 22/32 (68.75%) |
+| Offline TD3+BC | 74/96 (77.08%) | 49/64 (76.56%) | 25/32 (78.13%) |
+| Online@50 | 73/96 (76.04%) | 47/64 (73.44%) | 26/32 (81.25%) |
+| Online@100 | 71/96 (73.96%) | 49/64 (76.56%) | 22/32 (68.75%) |
+| Online@150 | 74/96 (77.08%) | 51/64 (79.69%) | 23/32 (71.88%) |
+| Online@200 | 75/96 (78.13%) | 53/64 (82.81%) | 22/32 (68.75%) |
+| Online@250 | 74/96 (77.08%) | 50/64 (78.13%) | 24/32 (75.00%) |
+| Online@300 | 75/96 (78.13%) | 51/64 (79.69%) | 24/32 (75.00%) |
+
+Online@300 reaches **78.13%**, compared with **77.08%** for offline TD3+BC and **72.92%** for EgoVLA. The additional online gain over offline is **one success out of 96**: room1/room2 gain two successes, while room3 loses one. More interaction does not produce monotonic improvement, and this single-seed experiment does not establish consistent gains across seeds.
+
+room1/room2 are the RL training scenes (RL-ID); room3 is excluded from both offline and online replay (RL-OOD relative to this split). room3 has historically been used for development and evaluation, so it is not an untouched test set. The [experiment report](docs/experiments/online-budget-20260915.md) records the actual training configuration, paired outcomes, and resume limitations; [machine-readable results](docs/experiments/online-budget-20260915.json) provide the per-scene outcome arrays. The reported run uses online BC weight 0.1 and replay mixtures that differ from the default YAML below.
+
 ## Scope and Attribution
 
 - **Upstream:** the EgoVLA baseline, original inference pipeline, and Open-Laptop task/benchmark come from the original open-source projects. Their documentation and credits are preserved in [README_EGOVLA_ORIGINAL.md](README_EGOVLA_ORIGINAL.md).
@@ -223,9 +242,7 @@ playground_eval/
 
 `playground_eval/` is ignored by Git. Experiment outputs and local absolute paths do not become publicly accessible by linking to them in this README.
 
-## Results and Demos
-
-The completed [300-episode budget report](docs/experiments/online-budget-20260915.md) includes the full milestone table, actual training settings, paired outcomes, and limitations. Online@300 reached 75/96 successes versus 74/96 for offline initialization; room1/room2 gained two successes and room3 lost one. Additional budget did not yield monotonic improvement.
+## Demos
 
 Selected public demos are pending consolidation. Unpopulated figure/video placeholders have been removed. The existing `media/EgoVLA-Teaser.jpg` belongs to upstream EgoVLA and is not evidence of this extension's results.
 
